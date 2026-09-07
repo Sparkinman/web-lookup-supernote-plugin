@@ -112,7 +112,8 @@ export async function dumpPage(): Promise<void> {
       `probe:   [${index}] ${describe(type)} numInPage=${String(element.numInPage)} ` +
         `layer=${String(element.layerNum)} ${rectOf(element)}` +
         (words ? ` text="${words}"` : '') +
-        (userData ? ` userData(${userData.length})="${userData.slice(0, 40)}"` : ''),
+        // Printed even when empty: its absence is the thing worth seeing.
+        ` userData=${userData ? `${userData.length}:"${userData.slice(0, 40)}"` : 'none'}`,
     );
   });
 

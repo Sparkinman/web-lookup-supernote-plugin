@@ -128,7 +128,7 @@ try {
       tapped(message.x, message.y).catch(err => log(`tap: ${err?.message ?? err}`));
     },
   });
-  log('motion listener registered (reporting only)');
+  log('motion listener registered');
 } catch (err) {
   log(`motion listener failed: ${err?.message ?? err}`);
 }

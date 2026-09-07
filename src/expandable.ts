@@ -146,6 +146,7 @@ export async function placeIcon(
       return why;
     }
     log(`expandable: inserted icon ${id} at ${left},${top} carrying ${text.length} characters`);
+    log(`expandable: sent userData of ${String(element.userData).length} chars`);
   } catch (err) {
     const why = err instanceof Error ? err.message : 'an unknown error';
     log(`expandable: insert threw — ${why}`);
@@ -170,6 +171,21 @@ export async function placeIcon(
     log(`expandable: reloadFile threw — ${err instanceof Error ? err.message : String(err)}`);
   }
 
+  // Read our own icon back. If the mark is gone here, it was lost in the write
+  // rather than in the reading, and no amount of hit-testing will find it.
+  const written = unwrap<Record<string, unknown>[]>(await PluginFileAPI.getElements(page, path));
+  const mine = Array.isArray(written)
+    ? written.find(e => {
+        const b = e.textBox as {textRect?: Rect} | undefined;
+        return b?.textRect?.left === left && b?.textRect?.top === top;
+      })
+    : undefined;
+  const kept = typeof mine?.userData === 'string' ? mine.userData : '';
+  log(
+    `expandable: read back — ${mine ? `found at ${left},${top}` : 'NOT FOUND'}, ` +
+      `userData ${kept ? `${kept.length} chars` : 'MISSING'}`,
+  );
+
   const after = await census(path, page, 'after');
   if (after >= 0 && after < before + 1) {
     log(`expandable: WARNING the page went from ${before} to ${after} elements`);
@@ -188,15 +204,38 @@ export async function placeIcon(
  * side of every write so the log says whether anything went missing.
  */
 export async function tapped(x: number, y: number): Promise<void> {
+  // Said on every tap. A silent handler cannot be told apart from a listener
+  // that never fired, which is exactly the ambiguity that wasted a round.
+  log(`tap: ${Math.round(x)},${Math.round(y)}`);
+
   const path = unwrap<string>(await PluginCommAPI.getCurrentFilePath());
   const page = unwrap<number>(await PluginCommAPI.getCurrentPageNum());
   if (!path || typeof page !== 'number' || !/\.note$/i.test(path)) {
+    log(`tap: not a note (${path ?? 'no path'})`);
     return;
   }
 
   const elements = unwrap<Record<string, unknown>[]>(await PluginFileAPI.getElements(page, path));
   if (!Array.isArray(elements)) {
+    log('tap: the page could not be read');
     return;
+  }
+
+  // What the tap is over, and what each of those carries. The icon placed last
+  // time came back with no userData at all, so the mark that identifies it as
+  // ours was lost somewhere between being set and being read -- and this says
+  // which of those it is.
+  for (const element of elements) {
+    const box = element.textBox as {textRect?: Rect; textContentFull?: string} | undefined;
+    const r = box?.textRect;
+    if (!r || x < r.left - HIT_PAD || x > r.right + HIT_PAD || y < r.top - HIT_PAD || y > r.bottom + HIT_PAD) {
+      continue;
+    }
+    const data = typeof element.userData === 'string' ? element.userData : '';
+    log(
+      `tap: over #${String(element.numInPage)} "${String(box?.textContentFull ?? '').slice(0, 20)}" ` +
+        `userData=${data ? `${data.length} chars starting "${data.slice(0, 24)}"` : 'NONE'}`,
+    );
   }
 
   const icon = elements.find(element => {
@@ -213,6 +252,7 @@ export async function tapped(x: number, y: number): Promise<void> {
     );
   });
   if (!icon) {
+    log('tap: nothing of ours under it');
     return;
   }
 
