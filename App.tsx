@@ -28,6 +28,7 @@ import {PluginManager} from 'sn-plugin-lib';
 
 import {
   captureAnchor,
+  positionInPage,
   readDocSelectionAsQuery,
   readLassoAsQuery,
   reference,
@@ -48,6 +49,7 @@ import {DEFAULT_LENS, LENSES, lensById, resolve, type Lens} from './src/search';
 import {
   captureMode,
   DEFAULT_SETTINGS,
+  fileInfo,
   labelOr,
   loadSettings,
   saveSettings,
@@ -448,6 +450,13 @@ export default function App(): React.JSX.Element {
           'sign in to Supernote Cloud in Settings, and this will go into your Digest';
       } else {
         try {
+          // How the device identifies the book, and where in the page the
+          // passage sits. Both are what its own digests carry, and both are
+          // read here rather than assumed.
+          const [identity, positions] = await Promise.all([
+            fileInfo(anchor.source.path),
+            positionInPage(anchor.source.page, query),
+          ]);
           const id = await addBookDigest(
             settings.cloudToken,
             text,
@@ -455,6 +464,8 @@ export default function App(): React.JSX.Element {
             anchor.source.page,
             reference(anchor),
             chosenUrls(),
+            identity,
+            positions,
           );
           log(`digest: created ${id} from ${anchor.fileName}`);
           setPicked([]);
@@ -476,7 +487,7 @@ export default function App(): React.JSX.Element {
     } finally {
       setBusy(false);
     }
-  }, [anchor, chosenUrls, finish, page, picked, settings]);
+  }, [anchor, chosenUrls, finish, page, picked, query, settings]);
 
   /**
    * Draw the chosen passages as an image and hang it off the handwriting.

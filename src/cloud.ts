@@ -245,7 +245,37 @@ export interface NewDigest {
   sourceType?: number;
   /** The page of that book, which Supernote keeps in a metadata blob. */
   page?: number;
+  /** Where the passage sits in that page's text, in characters. */
+  startPosition?: number;
+  endPosition?: number;
+  /** How the device identifies the source: its byte count and content hash. */
+  sourceSize?: number;
+  sourceMd5?: string;
   libraryUid?: string;
+}
+
+/**
+ * A path as the cloud stores it: relative to the device's storage root.
+ *
+ * A digest the device made names `Document/Bible Stuff/Bible.pdf`, where the
+ * plugin knows the same file as `/storage/emulated/0/Document/...`. The prefix
+ * is this device's mount point and means nothing to an account that may be read
+ * on another one, so it is dropped.
+ */
+export function cloudPath(path: string): string {
+  return path.replace(/^\/storage\/emulated\/\d+\//, '').replace(/^\/+/, '');
+}
+
+/**
+ * One line, with runs of space collapsed.
+ *
+ * The device stores a passage lifted across a line break as a single line with
+ * the break turned into spaces -- "wealth,     or gives to the rich" -- so a
+ * digest written with real newlines in it is not shaped like the ones beside
+ * it.
+ */
+function oneLine(text: string): string {
+  return text.replace(/\s*\n+\s*/g, ' ').trim();
 }
 
 /**
@@ -260,27 +290,55 @@ export interface NewDigest {
  * by the device is undocumented, which is what the round trip below tests.
  */
 export async function createDigest(token: string, digest: NewDigest): Promise<string> {
-  const content = digest.content.trim();
+  const content = oneLine(digest.content);
   if (!content) {
     throw new Error('A digest needs some text.');
   }
+
+  // Shaped after one the device made rather than after the minimum the API
+  // accepts. The minimum is accepted and arrives inert: the jump back to the
+  // book does not work and the passage does not show where the device's own
+  // digests show theirs.
   const payload: Record<string, unknown> = {
     content,
     uniqueIdentifier: `${Date.now().toString(16)}${Math.floor(Math.random() * 1e12).toString(16)}`,
     md5Hash: await native!.hash('MD5', content),
+    // Empty strings rather than absent. A real row carries "" for each of
+    // these, and a null is not the same thing to whatever renders them.
+    parentUniqueIdentifier: digest.libraryUid ?? '',
+    commentStr: '',
+    commentHandwriteName: '',
+    handwriteMD5: '',
+    isSummaryGroup: 'N',
   };
+
   if (digest.sourcePath) {
-    payload.sourcePath = digest.sourcePath;
+    payload.sourcePath = cloudPath(digest.sourcePath);
     payload.sourceType = digest.sourceType ?? SOURCE_DOCUMENT;
   }
+
   if (typeof digest.page === 'number') {
     // A JSON string inside a JSON field, which is how the device stores it.
-    payload.metadata = JSON.stringify({
-      document_location_data: JSON.stringify([{page: digest.page}]),
-    });
-  }
-  if (digest.libraryUid) {
-    payload.parentUniqueIdentifier = digest.libraryUid;
+    // The positions are where the passage sits in the page's text; the size and
+    // hash are how the file itself is identified, since the path alone is not
+    // enough to find it on another device.
+    const location: Record<string, number> = {chapter: 0, page: digest.page};
+    if (typeof digest.startPosition === 'number') {
+      location.startPosition = digest.startPosition;
+    }
+    if (typeof digest.endPosition === 'number') {
+      location.endPosition = digest.endPosition;
+    }
+    const metadata: Record<string, unknown> = {
+      document_location_data: JSON.stringify([location]),
+    };
+    if (digest.sourceSize) {
+      metadata.source_size = digest.sourceSize;
+    }
+    if (digest.sourceMd5) {
+      metadata.unique_identifier = digest.sourceMd5;
+    }
+    payload.metadata = JSON.stringify(metadata);
   }
 
   const body = await call('POST', ADD_DIGEST, payload, token);
@@ -388,14 +446,20 @@ export async function addBookDigest(
   page: number,
   reference: string,
   urls: string[],
+  identity: {md5: string; size: number} | null,
+  positions: {start: number; end: number} | null,
 ): Promise<string> {
   // The passage first, since that is what a person reads in the digest list;
   // where it came from underneath it.
-  const content = [passage.trim(), reference, ...urls].filter(Boolean).join('\n\n');
+  const content = [passage.trim(), reference, ...urls].filter(Boolean).join(' — ');
   return createDigest(token, {
     content,
     sourcePath: bookPath,
     sourceType: SOURCE_DOCUMENT,
     page,
+    startPosition: positions?.start,
+    endPosition: positions?.end,
+    sourceSize: identity?.size,
+    sourceMd5: identity?.md5,
   });
 }

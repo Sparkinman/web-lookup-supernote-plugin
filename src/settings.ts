@@ -16,6 +16,7 @@ interface SettingsNative {
   write(contents: string): Promise<string>;
   listDirs(relativePath: string): Promise<string[]>;
   makeDirs(relativePath: string): Promise<string>;
+  fileInfo(path: string): Promise<{md5: string; size: number}>;
 }
 
 const native: SettingsNative | undefined = NativeModules.LookUpSettings;
@@ -199,6 +200,27 @@ export async function saveSettings(settings: Settings): Promise<void> {
     await native.write(JSON.stringify(settings, null, 2));
   } catch (err) {
     log(`settings: could not save (${err instanceof Error ? err.message : String(err)})`);
+  }
+}
+
+/**
+ * A file's size and content hash, or null when it cannot be read.
+ *
+ * Supernote identifies a source document by this pair rather than by its path:
+ * a digest the device made carries `source_size` and a 32-hex
+ * `unique_identifier` beside the page reference.
+ */
+export async function fileInfo(
+  path: string,
+): Promise<{md5: string; size: number} | null> {
+  if (!native?.fileInfo || !path) {
+    return null;
+  }
+  try {
+    return await native.fileInfo(path);
+  } catch (err) {
+    log(`fileInfo failed (${err instanceof Error ? err.message : String(err)})`);
+    return null;
   }
 }
 

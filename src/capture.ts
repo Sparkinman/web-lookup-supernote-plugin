@@ -175,6 +175,47 @@ export function withBookContext(
   return clamp(normalize(`${anchor.fileName} ${query}`));
 }
 
+/**
+ * Where a passage sits in its page, in characters.
+ *
+ * A digest the device made records `startPosition` and `endPosition` alongside
+ * the page, which is how it knows what to highlight when the jump back lands.
+ * The page's text is available, so the offsets are found by looking the
+ * selection up in it rather than guessed.
+ *
+ * Null when the passage cannot be located, which is no worse than the absent
+ * fields we sent before.
+ */
+export async function positionInPage(
+  page: number,
+  selection: string,
+): Promise<{start: number; end: number} | null> {
+  const wanted = selection.trim();
+  if (!wanted) {
+    return null;
+  }
+  try {
+    const text = unwrap<string>(
+      await PluginDocAPI.getCurrentDocText(page),
+      'getCurrentDocText',
+    );
+    // The selection comes back with line breaks the page text may not share, so
+    // both are flattened before looking one up in the other.
+    const flatten = (value: string) => value.replace(/\s+/g, ' ');
+    const haystack = flatten(text);
+    const needle = flatten(wanted);
+    const start = haystack.indexOf(needle);
+    if (start < 0) {
+      log('position: the selection was not found in the page text');
+      return null;
+    }
+    return {start, end: start + needle.length};
+  } catch (err) {
+    log(`position: unavailable (${err instanceof Error ? err.message : String(err)})`);
+    return null;
+  }
+}
+
 /** Where a lookup was started from, so a result can be written back to it. */
 export interface SourceRef {
   path: string;

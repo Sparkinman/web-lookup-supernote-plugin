@@ -15,6 +15,7 @@ import React, {useState} from 'react';
 import {ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
 
 import {beginSignIn, CLOUD_AVAILABLE, finishSignIn, testRoundTrip} from './cloud';
+import {fileInfo} from './settings';
 import {FolderPicker} from './FolderPicker';
 import {
   BOOK_QUERY_CHOICES,
@@ -211,6 +212,23 @@ export function SettingsScreen({
       setCloudStatus('Signed in.');
     } catch (err) {
       setCloudStatus(err instanceof Error ? err.message : 'That code was not accepted.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runIdentity = async () => {
+    setBusy(true);
+    setCloudStatus('Hashing the book — an eighty-megabyte one takes a moment…');
+    try {
+      const info = await fileInfo(settings.lastBook);
+      if (!info) {
+        setCloudStatus('That book could not be read. Look something up in one first.');
+        return;
+      }
+      setCloudStatus(`size ${info.size}, md5 ${info.md5} — see the log.`);
+    } catch (err) {
+      setCloudStatus(err instanceof Error ? err.message : 'Could not hash it.');
     } finally {
       setBusy(false);
     }
@@ -432,6 +450,16 @@ export function SettingsScreen({
                   <Text style={styles.choiceHint}>
                     Creates one digest naming the last book you looked something up in, reads it
                     back to see which fields survived, and removes it again.
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.choice, busy && styles.dim]}
+                  disabled={busy}
+                  onPress={() => void runIdentity()}>
+                  <Text style={styles.choiceLabel}>Check how the last book is identified</Text>
+                  <Text style={styles.choiceHint}>
+                    Reads its size and content hash, which is how Supernote names a source
+                    document. Nothing is sent anywhere.
                   </Text>
                 </TouchableOpacity>
                 <TouchableOpacity

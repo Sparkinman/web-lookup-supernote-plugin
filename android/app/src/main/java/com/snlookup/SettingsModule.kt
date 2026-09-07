@@ -7,6 +7,7 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import java.io.File
+import java.security.MessageDigest
 
 /**
  * Keeps the user's preferences between runs.
@@ -103,6 +104,46 @@ class SettingsModule(reactContext: ReactApplicationContext) :
       }
     } catch (t: Throwable) {
       promise.reject("MKDIR_FAILED", t.message ?: t.toString(), t)
+    }
+  }
+
+  /**
+   * A file's size and the MD5 of its contents.
+   *
+   * A digest the device made carries `source_size` and a 32-hex
+   * `unique_identifier` in its metadata, and the pair is how Supernote
+   * identifies a file: size plus content hash, not path. Hashed in a stream so
+   * an eighty-megabyte book does not have to be held in memory at once.
+   */
+  @ReactMethod
+  fun fileInfo(path: String, promise: Promise) {
+    try {
+      val file = File(path)
+      if (!file.isFile) {
+        promise.reject("NO_FILE", "There is no file at $path")
+        return
+      }
+      val digest = MessageDigest.getInstance("MD5")
+      val started = System.currentTimeMillis()
+      file.inputStream().use { stream ->
+        val buffer = ByteArray(1 shl 16)
+        while (true) {
+          val read = stream.read(buffer)
+          if (read <= 0) break
+          digest.update(buffer, 0, read)
+        }
+      }
+      val md5 = digest.digest().joinToString("") { "%02x".format(it) }
+      val took = System.currentTimeMillis() - started
+      LogFile.append("fileInfo: ${file.length()} bytes, md5 $md5, ${took}ms — $path")
+      promise.resolve(
+          Arguments.createMap().apply {
+            putString("md5", md5)
+            putDouble("size", file.length().toDouble())
+          })
+    } catch (t: Throwable) {
+      LogFile.append("fileInfo: failed $t")
+      promise.reject("FILE_INFO_FAILED", t.message ?: t.toString(), t)
     }
   }
 
