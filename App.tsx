@@ -35,12 +35,9 @@ import {
   type Anchor,
 } from './src/capture';
 import {
-  appendDigest,
   attachClip,
-  notesReachable,
   attachScreenshot,
   CLIP_AVAILABLE,
-  drawClip,
   insertPassages,
   type ClipSection,
 } from './src/clip';
@@ -50,12 +47,9 @@ import {DENIED, ensureFileWrite, ensureNetwork} from './src/permissions';
 import {DEFAULT_LENS, LENSES, lensById, resolve, type Lens} from './src/search';
 import {
   captureMode,
-  clearQueue,
   DEFAULT_SETTINGS,
   labelOr,
   loadSettings,
-  queueExcerpt,
-  readQueue,
   saveSettings,
   type Settings,
 } from './src/settings';
@@ -295,8 +289,6 @@ export default function App(): React.JSX.Element {
       lensRef.current = remembered;
       setLens(remembered);
       log(`settings: lens=${loaded.lens} bookQuery=${loaded.bookQuery}`);
-      // Before anything else a lookup might overwrite on screen.
-      void flushDigest(loaded.digestNote);
       if (fromConfig) {
         // Opened to be configured, not to look anything up. Starting a lookup
         // as well would put a search behind the settings for no reason.
@@ -308,58 +300,6 @@ export default function App(): React.JSX.Element {
     // Deliberately once: this is the "why did the panel open" step, and
     // re-running it on every change of startFromButton would repeat the lookup.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  /**
-   * Write anything held from a book into the digest note.
-   *
-   * Runs on every mount and simply gives up quietly when notes are out of
-   * reach, which is the case whenever a book is the app in front. The excerpts
-   * were drawn when they were taken, so nothing here needs the book.
-   */
-  const flushDigest = useCallback(async (notePath: string) => {
-    const waiting = await readQueue();
-    if (waiting.length === 0) {
-      return;
-    }
-    if (!(await notesReachable(notePath))) {
-      log(`digest: ${waiting.length} excerpt(s) still held, notes out of reach`);
-      return;
-    }
-    let written = 0;
-    for (const entry of waiting) {
-      const failure = await appendDigest(
-        {
-          reference: entry.reference,
-          text: entry.text,
-          urls: entry.urls,
-          image: entry.imagePath
-            ? {path: entry.imagePath, width: entry.imageWidth, height: entry.imageHeight}
-            : null,
-          bookPath: entry.bookPath,
-          bookPage: entry.bookPage,
-          bookName: entry.bookName,
-        },
-        notePath,
-      );
-      if (failure) {
-        log(`digest: held excerpt could not be written — ${failure}`);
-        // Left in the queue rather than dropped: a failure here is usually the
-        // note being busy, and losing somebody's reading to tidiness is worse
-        // than writing it twice.
-        return;
-      }
-      written += 1;
-    }
-    if (written > 0) {
-      await clearQueue();
-      log(`digest: wrote ${written} held excerpt(s) into ${notePath}`);
-      setStatus(
-        written === 1
-          ? 'One held excerpt went into your digest.'
-          : `${written} held excerpts went into your digest.`,
-      );
-    }
   }, []);
 
   /** Later presses, while the panel is already up. */
@@ -460,7 +400,6 @@ export default function App(): React.JSX.Element {
     if (!text) {
       return;
     }
-    const order = [...picked].sort((a, b) => a - b);
     setBusy(true);
     setStatus(anchor.isNote ? 'Writing in…' : 'Adding to the digest…');
     try {
@@ -476,61 +415,15 @@ export default function App(): React.JSX.Element {
           urls: chosenUrls(),
         });
       } else {
-        // A book cannot be written into, and neither can a note while a book is
-        // the app in front -- the firmware refuses every PluginFileAPI call,
-        // reads included, with code 102. So the excerpt is drawn now, while the
-        // selection and the clipping still exist, and parked; it is written
-        // into the digest note the next time the plugin runs over a note.
-        const image = !settings.savePicture
-          ? null
-          : await drawClip({
-              title: page.title || query,
-              folder: settings.clipFolder,
-              source: [reference(anchor), page.viewerUrl ?? url ?? '']
-                .filter(Boolean)
-                .join('\n'),
-              sections: order
-                .map(i => page.blocks[i])
-                .filter((block): block is Block => Boolean(block))
-                .map(block => ({
-                  heading: block.text,
-                  url: block.href ?? '',
-                  body: block.detail ?? '',
-                })),
-            });
-
-        const entry = {
-          reference: reference(anchor),
-          text,
-          urls: chosenUrls(),
-          image,
-          bookPath: anchor.source.path,
-          bookPage: anchor.source.page,
-          bookName: anchor.fileName,
-        };
-
-        if (await notesReachable(settings.digestNote)) {
-          failure = await appendDigest(entry, settings.digestNote);
-        } else if (
-          await queueExcerpt({
-            reference: entry.reference,
-            text: entry.text,
-            urls: entry.urls,
-            imagePath: image?.path ?? '',
-            imageWidth: image?.width ?? 0,
-            imageHeight: image?.height ?? 0,
-            bookPath: entry.bookPath,
-            bookPage: entry.bookPage,
-            bookName: entry.bookName,
-          })
-        ) {
-          setPicked([]);
-          setStatus('Held for your digest — it goes in next time you look something up from a note.');
-          finish();
-          return;
-        } else {
-          failure = 'the excerpt could not be held for the digest';
-        }
+        // Nothing is kept from a book yet, and nothing is invented in place of
+        // it. These excerpts belong in the device's own Digest, and the SDK
+        // exposes no call that makes the firmware take one -- only the element
+        // vocabulary for writing a digest text box into a note, which needs the
+        // real `textDigestData` format before it would be a digest rather than
+        // something merely shaped like one. Collecting them into a note of our
+        // own was the wrong answer to that, so it is not done.
+        failure =
+          'nothing can be kept from a book yet — the device will not let a plugin write while a book is open';
       }
       if (failure) {
         log(`insert failed: ${failure}`);
@@ -543,16 +436,7 @@ export default function App(): React.JSX.Element {
     } finally {
       setBusy(false);
     }
-  }, [
-    anchor,
-    chosenUrls,
-    finish,
-    page,
-    picked,
-    query,
-    settings,
-    url,
-  ]);
+  }, [anchor, chosenUrls, finish, page, picked]);
 
   /**
    * Draw the chosen passages as an image and hang it off the handwriting.
