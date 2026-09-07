@@ -738,27 +738,32 @@ export default function App(): React.JSX.Element {
     }
   }, [anchor, chosenUrls, finish, page, picked, query, settings, url]);
 
-  /** Photograph the reader as it stands. */
-  const screenshot = useCallback(async () => {
-    const tag = findNodeHandle(readerRef.current);
-    if (tag === null) {
-      setStatus('There is nothing on screen to capture.');
+  /**
+   * Read the passages on screen into the editor.
+   *
+   * The words rather than a picture of them, because that is what can be kept
+   * anywhere: a digest holds text and a note takes it as a text box. Identical
+   * in a note and in a book, so there is one behaviour to learn and one to
+   * test.
+   */
+  const captureText = useCallback(() => {
+    const shown = visibleText();
+    if (!shown) {
+      setStatus('Nothing on screen to capture yet.');
       return;
     }
+    noteTouched.current = true;
+    setUnsaved(true);
+    setNote(current => (current ? `${current}\n\n${shown}` : shown));
+    setEditingNote(true);
+    setStatus('Captured what is on screen — trim it, then keep it.');
+  }, [visibleText]);
 
-    // From a book, the words rather than a picture of them. A digest holds
-    // text and cannot hold a screenshot, so what is on screen is read out, put
-    // in front of the reader to cut down, and saved into the typed section.
-    if (!anchor?.isNote) {
-      const shown = visibleText();
-      if (!shown) {
-        setStatus('Nothing on screen to capture yet.');
-        return;
-      }
-      noteTouched.current = true;
-      setNote(current => (current ? `${current}\n\n${shown}` : shown));
-      setEditingNote(true);
-      setStatus('Captured what is on screen — trim it, then add it to your Digest.');
+  /** Photograph the reader as it stands, and hang the picture off the writing. */
+  const screenshot = useCallback(async () => {
+    const tag = findNodeHandle(readerRef.current);
+    if (tag === null || !anchor) {
+      setStatus('There is nothing on screen to capture.');
       return;
     }
 
@@ -788,7 +793,7 @@ export default function App(): React.JSX.Element {
     } finally {
       setBusy(false);
     }
-  }, [anchor, chosenUrls, finish, settings, visibleText]);
+  }, [anchor, chosenUrls, finish, settings]);
 
   const handOff = useCallback(async () => {
     // Wikipedia is read through its API, so what was fetched is not what a
@@ -1032,14 +1037,22 @@ export default function App(): React.JSX.Element {
 
             </TouchableOpacity>
           )}
-          {CLIP_AVAILABLE && (
+          {/* The same button, doing the same thing, whichever the lookup began
+              in: it reads the passages on screen into the editor. Having it
+              only in a book meant the two halves of the plugin had to be
+              learnt, and tested, separately. */}
+          <TouchableOpacity
+            style={[styles.insert, busy && styles.btnOff]}
+            onPress={captureText}
+            disabled={busy}>
+            <Text style={styles.insertText}>Capture text</Text>
+          </TouchableOpacity>
+          {anchor?.isNote && CLIP_AVAILABLE && (
             <TouchableOpacity
               style={[styles.insert, busy && styles.btnOff]}
               onPress={screenshot}
               disabled={busy}>
-              <Text style={styles.insertText}>
-                {anchor?.isNote ? 'Screenshot' : 'Capture text'}
-              </Text>
+              <Text style={styles.insertText}>Screenshot</Text>
             </TouchableOpacity>
           )}
           {anchor?.isNote && CLIP_AVAILABLE && (
