@@ -58,6 +58,7 @@ import {
   type Settings,
 } from './src/settings';
 import {addBookDigest, calibrate, isExpired, sessionIsGood} from './src/cloud';
+import {placeIcon} from './src/expandable';
 import {dumpPage} from './src/pageprobe';
 import {SettingsScreen} from './src/Settings';
 import {get, openExternally, postForm, WEB_AVAILABLE} from './src/web';
@@ -935,6 +936,34 @@ export default function App(): React.JSX.Element {
     });
   }, [chosenText, guard, mark, pageAsText, range, selecting, visibleText]);
 
+  /**
+   * Round B: place one icon, deliberately, and check the page afterwards.
+   *
+   * Its own button rather than part of anything else. The last write to a note
+   * was folded into a button that did several things, so it ran before it had
+   * been proven -- this one happens only when it is asked for, and says what
+   * the page held before and after.
+   */
+  const testIcon = useCallback(async () => {
+    if (!anchor?.isNote) {
+      setStatus('Open this from a note first.');
+      return;
+    }
+    const text = note.trim() || chosenText() || 'Round B test clipping.';
+    setBusy(true);
+    setStatus('Placing one icon…');
+    try {
+      const refused = await placeIcon(
+        anchor,
+        labelOr(settings.notesLabel, DEFAULT_SETTINGS.notesLabel),
+        text,
+      );
+      setStatus(refused ? `Refused: ${refused}` : 'Icon placed. Check the page and the log.');
+    } finally {
+      setBusy(false);
+    }
+  }, [anchor, chosenText, note, settings]);
+
   /** Photograph the reader as it stands, and hang the picture off the writing. */
   const screenshot = useCallback(async () => {
     const tag = findNodeHandle(readerRef.current);
@@ -1395,6 +1424,14 @@ export default function App(): React.JSX.Element {
               onPress={screenshot}
               disabled={busy}>
               <Text style={styles.insertText}>Screenshot</Text>
+            </TouchableOpacity>
+          )}
+          {anchor?.isNote && (
+            <TouchableOpacity
+              style={[styles.btn, busy && styles.btnOff]}
+              onPress={() => void testIcon()}
+              disabled={busy}>
+              <Text style={styles.btnText}>Test: place icon</Text>
             </TouchableOpacity>
           )}
           {anchor?.isNote && CLIP_AVAILABLE && (
