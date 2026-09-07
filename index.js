@@ -15,7 +15,7 @@ import {name as appName} from './app.json';
 import {PluginManager} from 'sn-plugin-lib';
 import {versionName, versionCode} from './PluginConfig.json';
 import {log, startSession} from './src/log';
-import {reportTap} from './src/pageprobe';
+import {tapped} from './src/expandable';
 
 // MUST come before PluginManager.init() — init depends on the registered component.
 // Root wraps the panel in an error boundary so a crash shows on the device
@@ -97,15 +97,13 @@ PluginManager.registerButton(3, ['DOC'], {
 /**
  * Touches on the note, whether or not this plugin's view is up.
  *
- * Round A: this reports and does nothing. It writes no element, deletes none,
- * and never calls saveCurrentNote -- which is the call that destroyed a page,
- * by pushing the plugin's stale cached copy back over the real file after an
- * element write.
+ * A tap on one of our icons opens the clipping it carries, and the next shuts
+ * it. Nothing else is touched: a tap that hits no icon costs one page read and
+ * says nothing, which is almost every tap.
  *
- * What it establishes is whether a tap's coordinates and an element's rectangle
- * are in the same space. Only DOWN and UP matter. A pen touch is ignored, since
- * a pen is drawing; so is anything that moved between down and up, which is a
- * drag rather than a tap.
+ * Only DOWN and UP matter. A pen touch is ignored, since a pen is drawing and
+ * reacting to it would fight the person holding it; so is anything that moved
+ * between down and up, which is a drag.
  */
 const TAP_SLOP = 24;
 let downAt = null;
@@ -127,7 +125,7 @@ try {
       if (Math.abs(message.x - from.x) > TAP_SLOP || Math.abs(message.y - from.y) > TAP_SLOP) {
         return;
       }
-      reportTap(message.x, message.y).catch(err => log(`tap: ${err?.message ?? err}`));
+      tapped(message.x, message.y).catch(err => log(`tap: ${err?.message ?? err}`));
     },
   });
   log('motion listener registered (reporting only)');
