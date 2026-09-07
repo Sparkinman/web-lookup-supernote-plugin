@@ -22,6 +22,6 @@ And you cannot attach anything to an element. `userData` is a documented string 
 
 **No account, no server.** Your search words go to the engine you picked and nowhere else. The Supernote sign-in is optional and only for the Digest; it talks to Supernote directly from the device and stores the session, never your password.
 
-Download and details: <LINK>
+Download and details: https://github.com/Sparkinman/web-lookup-supernote-plugin/releases/latest
 
 It writes into your pages, so try it on a scratch note first. Bug reports welcome.
