@@ -78,8 +78,10 @@ export async function readLassoAsQuery(): Promise<string> {
       // plain text box into a digest excerpt (element type 501/502) — but the
       // SDK never says what belongs in it. One real example read back off the
       // device settles it.
+      // The whole box, not one field of it. This previously logged only
+      // textDigestData, from a call that comes back empty for digest boxes.
       if (box?.textDigestData) {
-        log(`DIGEST DATA: ${box.textDigestData}`);
+        log(`lasso: DIGEST BOX ${JSON.stringify(box)}`);
       }
     }
   } catch {
@@ -94,6 +96,14 @@ export async function readLassoAsQuery(): Promise<string> {
     await step('getLassoElements', () => PluginCommAPI.getLassoElements()),
     'getLassoElements',
   );
+  // `step` truncates what it logs, which is right for a page of strokes and
+  // wrong for the one element worth reading. Anything carrying digest data is
+  // printed whole here instead.
+  for (const element of elements as {type?: number; textBox?: {textDigestData?: string}}[]) {
+    if (element?.textBox?.textDigestData) {
+      log(`lasso: DIGEST ELEMENT type=${element.type} ${JSON.stringify(element.textBox)}`);
+    }
+  }
   if (elements.length === 0) {
     throw new Error('Nothing selected.');
   }

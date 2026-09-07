@@ -1,6 +1,6 @@
 {
   "name": "snlookup",
-  "version": "2.5.0",
+  "version": "2.5.1",
   "description": "Look up a selection on the web from a Supernote note, book or PDF, and keep what matters.",
   "private": true,
   "scripts": {
