@@ -120,6 +120,18 @@ export default function App(): React.JSX.Element {
   const [editingNote, setEditingNote] = useState(false);
   /** Whether the draft has been touched, so choosing again does not overwrite it. */
   const noteTouched = useRef(false);
+  /**
+   * Work that has been done and not yet kept anywhere.
+   *
+   * Only edits count. Choosing passages is undone by choosing them again, but
+   * a paragraph somebody has cut down by hand exists nowhere else, and closing
+   * the panel is the one action here that cannot be taken back.
+   */
+  const [unsaved, setUnsaved] = useState(false);
+  /** A question that must be answered before the thing behind it happens. */
+  const [confirm, setConfirm] = useState<{question: string; act: () => void} | null>(null);
+  /** The same flag for callbacks registered once, which never see it change. */
+  const unsavedRef = useRef(false);
   /** The highlight drift is measured once a run; it does not change. */
   const calibrated = useRef(false);
   /**
@@ -395,8 +407,29 @@ export default function App(): React.JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /** Later presses, while the panel is already up. */
-  useEffect(() => onButtonPress(startFromButton), [startFromButton]);
+  /**
+   * Later presses, while the panel is already up.
+   *
+   * A second lookup clears the draft, so it asks first when there is one.
+   * Answering yes runs the lookup that prompted the question, not the next one.
+   */
+  useEffect(
+    () =>
+      onButtonPress((buttonId: number | null) => {
+        if (unsavedRef.current) {
+          setConfirm({
+            question: 'You have text you have not kept. Start a new lookup anyway?',
+            act: () => {
+              setUnsaved(false);
+              void startFromButton(buttonId);
+            },
+          });
+          return;
+        }
+        void startFromButton(buttonId);
+      }),
+    [startFromButton],
+  );
 
   /** The management screen's settings button, pressed while the panel is up. */
   useEffect(() => onConfigPress(() => setShowSettings(true)), []);
@@ -464,6 +497,26 @@ export default function App(): React.JSX.Element {
     }
   }, [chosenText]);
 
+  /**
+   * Do something that would lose the draft, asking first if there is one.
+   *
+   * The prompt is drawn in the panel rather than raised as a dialog: a second
+   * Android window costs a full e-ink refresh to appear and another to go, on
+   * a screen where that is the slowest thing there is.
+   */
+  unsavedRef.current = unsaved;
+
+  const guard = useCallback(
+    (question: string, act: () => void) => {
+      if (!unsaved) {
+        act();
+        return;
+      }
+      setConfirm({question, act});
+    },
+    [unsaved],
+  );
+
   const finish = useCallback(() => {
     setTimeout(() => PluginManager.closePluginView(), CLOSE_DELAY);
   }, []);
@@ -471,12 +524,21 @@ export default function App(): React.JSX.Element {
   const back = useCallback(() => {
     const previous = history[history.length - 1];
     if (!previous) {
+      // Nothing left to go back to, so this leaves. Answer it here rather than
+      // letting the panel close over unkept work.
+      if (unsaved) {
+        setConfirm({
+          question: 'You have text you have not kept. Leave anyway?',
+          act: () => PluginManager.closePluginView(),
+        });
+        return true;
+      }
       return false;
     }
     setHistory(prev => prev.slice(0, -1));
     open(previous);
     return true;
-  }, [history, open]);
+  }, [history, open, unsaved]);
 
   /** Hardware/system back should walk the reader's history before closing. */
   useEffect(() => {
@@ -589,6 +651,7 @@ export default function App(): React.JSX.Element {
           );
           log(`digest: created ${id} from ${anchor.fileName}`);
           setPicked([]);
+      setUnsaved(false);
           setStatus('Added to your Digest.');
           finish();
           return;
@@ -667,6 +730,7 @@ export default function App(): React.JSX.Element {
         return;
       }
       setPicked([]);
+      setUnsaved(false);
       setStatus('Links inserted.');
       finish();
     } finally {
@@ -764,6 +828,25 @@ export default function App(): React.JSX.Element {
 
   return (
     <View style={styles.root}>
+      {confirm ? (
+        <View style={styles.confirm}>
+          <Text style={styles.confirmText}>{confirm.question}</Text>
+          <View style={styles.footerButtons}>
+            <TouchableOpacity
+              style={styles.insert}
+              onPress={() => {
+                const act = confirm.act;
+                setConfirm(null);
+                act();
+              }}>
+              <Text style={styles.insertText}>Yes, discard it</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.btn} onPress={() => setConfirm(null)}>
+              <Text style={styles.btnText}>Keep editing</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : null}
       <View style={styles.bar}>
         <TouchableOpacity
           style={[styles.btn, history.length === 0 && styles.btnOff]}
@@ -792,7 +875,13 @@ export default function App(): React.JSX.Element {
           </TouchableOpacity>
         ) : null}
 
-        <TouchableOpacity style={styles.btn} onPress={() => PluginManager.closePluginView()}>
+        <TouchableOpacity
+          style={styles.btn}
+          onPress={() =>
+            guard('You have text you have not kept. Close anyway?', () =>
+              PluginManager.closePluginView(),
+            )
+          }>
           <Text style={styles.btnText}>Close</Text>
         </TouchableOpacity>
       </View>
@@ -856,6 +945,7 @@ export default function App(): React.JSX.Element {
             value={note}
             onChangeText={value => {
               noteTouched.current = true;
+              setUnsaved(true);
               setNote(value);
             }}
             multiline
@@ -1052,9 +1142,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: 2,
     borderBottomColor: '#000',
   },
-  btn: {paddingHorizontal: 12, paddingVertical: 10},
-  btnOff: {opacity: 0.3},
-  btnText: {fontSize: 16, color: '#000'},
+  btn: {paddingHorizontal: 14, paddingVertical: 12},
+  btnOff: {opacity: 0.35},
+  btnText: {fontSize: 18, color: '#000', fontWeight: '600'},
   input: {
     flex: 1,
     borderWidth: 2,
@@ -1172,6 +1262,15 @@ const styles = StyleSheet.create({
   },
   footerButtons: {flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', marginTop: 6},
   // Tall enough to work in, bounded so the reader behind it is still visible.
+  // Inverted so it cannot be mistaken for part of the page behind it.
+  confirm: {
+    backgroundColor: '#000',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 2,
+    borderBottomColor: '#000',
+  },
+  confirmText: {fontSize: 17, color: '#fff', marginBottom: 6},
   editor: {flex: 1, paddingHorizontal: 12, paddingVertical: 8},
   editorHead: {flexDirection: 'row', alignItems: 'center', marginBottom: 6},
   // Kept mounted rather than unmounted: the reader holds the scroll position
@@ -1197,11 +1296,13 @@ const styles = StyleSheet.create({
   },
   footerText: {fontSize: 15, color: '#000'},
   insert: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderWidth: 2,
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+    borderWidth: 3,
     borderColor: '#000',
+    backgroundColor: '#000',
     marginLeft: 8,
+    marginTop: 6,
   },
-  insertText: {fontSize: 14, color: '#000', fontWeight: '600'},
+  insertText: {fontSize: 19, color: '#fff', fontWeight: '700'},
 });

@@ -559,8 +559,8 @@ const styles = StyleSheet.create({
   },
   title: {fontSize: 20, fontWeight: '700', color: '#000'},
   spacer: {flex: 1},
-  btn: {paddingHorizontal: 14, paddingVertical: 10},
-  btnText: {fontSize: 18, color: '#000', fontWeight: '600'},
+  btn: {paddingHorizontal: 16, paddingVertical: 14, borderWidth: 2, borderColor: '#000', marginLeft: 8},
+  btnText: {fontSize: 19, color: '#000', fontWeight: '700'},
   body: {flex: 1},
   bodyInner: {padding: 12, paddingBottom: 40},
 
