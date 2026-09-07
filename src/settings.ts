@@ -35,9 +35,6 @@ export type CaptureMode = 'png' | 'link' | 'both';
  */
 export type BookQuery = 'text' | 'withBook';
 
-/** Where excerpts taken from a book are collected. */
-export const DEFAULT_DIGEST_NOTE = '/storage/emulated/0/Note/Look Up.note';
-
 /**
  * One-tap words to add to a search.
  *
@@ -83,8 +80,6 @@ export interface Settings {
   bookQuery: BookQuery;
   /** What the link to the saved clipping is called on the page. */
   notesLabel: string;
-  /** The note that book excerpts are appended to, since a book cannot hold them. */
-  digestNote: string;
   /** Where clippings and screenshots are saved. */
   clipFolder: string;
   /** The one-tap additions offered under the search box. */
@@ -123,7 +118,6 @@ export const DEFAULT_SETTINGS: Settings = {
   // plain definition, and the plain definition is the commoner lookup.
   bookQuery: 'text',
   notesLabel: 'Notes',
-  digestNote: DEFAULT_DIGEST_NOTE,
   clipFolder: DEFAULT_CLIP_FOLDER,
   refinements: DEFAULT_REFINEMENTS,
   lastBook: '',
@@ -202,10 +196,6 @@ export async function loadSettings(): Promise<Settings> {
       lens: typeof parsed.lens === 'string' && parsed.lens ? parsed.lens : DEFAULT_SETTINGS.lens,
       bookQuery: isBookQuery(parsed.bookQuery) ? parsed.bookQuery : DEFAULT_SETTINGS.bookQuery,
       notesLabel: cleanLabel(parsed.notesLabel) ?? DEFAULT_SETTINGS.notesLabel,
-      digestNote:
-        typeof parsed.digestNote === 'string' && parsed.digestNote.trim()
-          ? parsed.digestNote.trim()
-          : DEFAULT_SETTINGS.digestNote,
       clipFolder:
         typeof parsed.clipFolder === 'string' && parsed.clipFolder.trim()
           ? parsed.clipFolder.trim()

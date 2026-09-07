@@ -119,6 +119,8 @@ export default function App(): React.JSX.Element {
    */
   const [selecting, setSelecting] = useState(false);
   const [range, setRange] = useState({start: 0, end: 0});
+  /** Where the reader said the passage begins and ends, by tapping. */
+  const [mark, setMark] = useState({start: 0, end: 0, hasStart: false, hasEnd: false});
   const [loading, setLoading] = useState(false);
   const [picked, setPicked] = useState<number[]>([]);
   const [status, setStatus] = useState<string | null>(null);
@@ -766,7 +768,10 @@ export default function App(): React.JSX.Element {
           );
           log(`digest: created ${id} from ${anchor.fileName}`);
           setPicked([]);
-      setUnsaved(false);
+          setUnsaved(false);
+          setNote('');
+          noteTouched.current = false;
+          setEditingNote(false);
           setStatus('Added to your Digest.');
           finish();
           return;
@@ -783,6 +788,12 @@ export default function App(): React.JSX.Element {
         return;
       }
       setPicked([]);
+      // Cleared, not merely flagged as kept: the next lookup asked whether to
+      // discard text that had already been written into the note.
+      setUnsaved(false);
+      setNote('');
+      noteTouched.current = false;
+      setEditingNote(false);
       setStatus(anchor.isNote ? 'Written in.' : 'Added to the digest.');
       finish();
     } finally {
@@ -846,6 +857,8 @@ export default function App(): React.JSX.Element {
       }
       setPicked([]);
       setUnsaved(false);
+      setNote('');
+      noteTouched.current = false;
       setStatus('Links inserted.');
       finish();
     } finally {
@@ -865,10 +878,16 @@ export default function App(): React.JSX.Element {
     // Three sources, narrowest first: a real selection, then whatever was
     // tapped, then what happens to be on screen. Each is a more deliberate
     // statement of intent than the one after it.
-    const selected =
-      selecting && range.end > range.start
-        ? pageAsText().slice(range.start, range.end).trim()
+    // Marked first, since two taps are a statement; then a live selection, for
+    // the word a double-tap catches.
+    const text = pageAsText();
+    const marked =
+      selecting && mark.hasStart && mark.hasEnd && mark.end > mark.start
+        ? text.slice(mark.start, mark.end).trim()
         : '';
+    const dragged =
+      selecting && range.end > range.start ? text.slice(range.start, range.end).trim() : '';
+    const selected = marked || dragged;
     const shown = selected || chosenText() || visibleText();
     if (!shown) {
       setStatus('Nothing selected or on screen to capture yet.');
@@ -885,7 +904,7 @@ export default function App(): React.JSX.Element {
       setEditingNote(true);
       setStatus('Captured what is on screen — trim it, then keep it.');
     });
-  }, [chosenText, guard, pageAsText, range, selecting, visibleText]);
+  }, [chosenText, guard, mark, pageAsText, range, selecting, visibleText]);
 
   /** Photograph the reader as it stands, and hang the picture off the writing. */
   const screenshot = useCallback(async () => {
@@ -990,23 +1009,6 @@ export default function App(): React.JSX.Element {
           <Text style={styles.btnText}>‹ Back</Text>
         </TouchableOpacity>
 
-        <View style={styles.inputWrap}>
-          <TextInput
-            style={styles.input}
-            value={query}
-            onChangeText={setQuery}
-            onSubmitEditing={() => search(query, lensRef.current)}
-            placeholder="Search, or type an address"
-            returnKeyType="search"
-            autoCorrect={false}
-          />
-          {query.length > 0 ? (
-            <TouchableOpacity style={styles.clear} onPress={() => setQuery('')}>
-              <Text style={styles.clearText}>✕</Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
-
         {/* Says where a plain word would go if this is pressed, and takes it
             there. Typing an address is recognised on its own, but only when it
             looks like one -- this asks for it outright, so a bare host or a
@@ -1026,6 +1028,25 @@ export default function App(): React.JSX.Element {
           }}>
           <Text style={styles.goText}>https://</Text>
         </TouchableOpacity>
+
+        <View style={styles.inputWrap}>
+          <TextInput
+            style={styles.input}
+            value={query}
+            onChangeText={setQuery}
+            onSubmitEditing={() => search(query, lensRef.current)}
+            placeholder="Search, or type an address"
+            returnKeyType="search"
+            autoCorrect={false}
+          />
+          {query.length > 0 ? (
+            <TouchableOpacity style={styles.clear} onPress={() => setQuery('')}>
+              <Text style={styles.clearText}>✕</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+
+
 
         {/* No Settings button here. Settings open from the device's plugin
             management screen, beside the install and the permissions, which is
@@ -1109,10 +1130,15 @@ export default function App(): React.JSX.Element {
               key={word}
               style={styles.refineBtn}
               onPress={() => {
-                // Added rather than replacing, and only once: pressing the same
-                // one twice should not search for it twice.
-                const already = query.trim().toLowerCase().endsWith(word.toLowerCase());
-                const asked = already ? query.trim() : `${query.trim()} ${word}`;
+                // In front of the passage rather than after it. A search that
+                // ends in "commentary" is a long quotation with a word stuck on
+                // the end; one that begins with it reads as the question being
+                // asked, which is what the leading terms of a query are
+                // weighted as. Added once only -- pressing the same word twice
+                // should not search for it twice.
+                const current = query.trim();
+                const already = current.toLowerCase().startsWith(word.toLowerCase());
+                const asked = already ? current : `${word} ${current}`;
                 setQuery(asked);
                 void search(asked, lensRef.current);
               }}>
@@ -1177,14 +1203,45 @@ export default function App(): React.JSX.Element {
           // The page as one field. Read-only in effect -- edits here would have
           // nothing to be saved into -- but a real text field, so the device's
           // own selection handles work and what they enclose can be read back.
-          <TextInput
-            style={styles.selectable}
-            value={pageAsText()}
-            onSelectionChange={event => setRange(event.nativeEvent.selection)}
-            multiline
-            showSoftInputOnFocus={false}
-            autoCorrect={false}
-          />
+          <View style={styles.selectWrap}>
+            {/* Two taps rather than a drag. The device gives a caret and a
+                double-tap word, but its selection handles will not be dragged
+                on this screen -- so where the caret is put is the answer, and
+                these two buttons remember it. */}
+            <View style={styles.selectBar}>
+              <TouchableOpacity
+                style={styles.selectBtn}
+                onPress={() => {
+                  setMark({...mark, start: range.start, hasStart: true});
+                  setStatus(`Start set at ${range.start}. Now tap where it should end.`);
+                }}>
+                <Text style={styles.selectBtnText}>Start here</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.selectBtn}
+                onPress={() => {
+                  setMark({...mark, end: range.end, hasEnd: true});
+                  setStatus(`End set at ${range.end}. Capture takes what is between.`);
+                }}>
+                <Text style={styles.selectBtnText}>End here</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.selectBtn}
+                onPress={() => {
+                  setMark({start: 0, end: 0, hasStart: false, hasEnd: false});
+                  setStatus('Marks cleared.');
+                }}>
+                <Text style={styles.selectBtnText}>Clear marks</Text>
+              </TouchableOpacity>
+            </View>
+            <TextInput
+              style={styles.selectable}
+              value={pageAsText()}
+              onSelectionChange={event => setRange(event.nativeEvent.selection)}
+              multiline
+              autoCorrect={false}
+            />
+          </View>
         ) : page && shown().length > 0 ? (
           <ScrollView
             ref={scrollRef}
@@ -1392,7 +1449,7 @@ const styles = StyleSheet.create({
     borderColor: '#000',
     paddingHorizontal: 10,
     paddingVertical: 10,
-    marginLeft: 6,
+    marginRight: 6,
   },
   goText: {fontSize: 15, color: '#000', fontWeight: '700'},
   input: {
@@ -1426,6 +1483,17 @@ const styles = StyleSheet.create({
   lensTextOn: {color: '#fff'},
   spacer: {flex: 1},
   lensShort: {fontSize: 12, color: '#000', marginTop: 2},
+  selectWrap: {flex: 1},
+  selectBar: {flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 8, paddingTop: 6},
+  selectBtn: {
+    borderWidth: 2,
+    borderColor: '#000',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginRight: 8,
+    marginBottom: 6,
+  },
+  selectBtnText: {fontSize: 16, color: '#000', fontWeight: '600'},
   selectable: {
     flex: 1,
     paddingHorizontal: 12,

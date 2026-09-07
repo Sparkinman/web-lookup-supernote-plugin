@@ -42,14 +42,6 @@ const relativeOf = (path: string): string =>
     .replace(/^\/+/, '')
     .replace(/\/+$/, '');
 
-const folderOf = (path: string): string => {
-  const cut = path.lastIndexOf('/');
-  return cut > 0 ? path.slice(0, cut) : path;
-};
-
-const nameOf = (path: string): string =>
-  path.slice(path.lastIndexOf('/') + 1) || 'Look Up.note';
-
 /**
  * A folder, drawn rather than typed.
  *
@@ -406,26 +398,6 @@ export function SettingsScreen({
             }}
           />
 
-          <PathField
-            label="Excerpts taken from a book"
-            hint="One page per excerpt, each with a link back to the page of the book."
-            value={settings.digestNote}
-            onChange={value => onChange({digestNote: value})}
-            browsing={picking === 'digest'}
-            onBrowse={() => setPicking(picking === 'digest' ? null : 'digest')}
-          />
-          <FolderPicker
-            visible={picking === 'digest'}
-            initialPath={relativeOf(folderOf(settings.digestNote))}
-            onCancel={() => setPicking(null)}
-            onPick={chosen => {
-              // The browser picks a folder; the note keeps the name it has.
-              onChange({
-                digestNote: `${STORAGE_ROOT}/${chosen}/${nameOf(settings.digestNote)}`,
-              });
-              setPicking(null);
-            }}
-          />
         </Fold>
 
         <Fold
