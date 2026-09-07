@@ -80,8 +80,6 @@ export interface Settings {
   bookQuery: BookQuery;
   /** What the link to the saved clipping is called on the page. */
   notesLabel: string;
-  /** Write Document/LookUp/log.txt, for reporting a fault. Off by default. */
-  diagnostics: boolean;
   /** Where clippings and screenshots are saved. */
   clipFolder: string;
   /** The one-tap additions offered under the search box. */
@@ -120,7 +118,6 @@ export const DEFAULT_SETTINGS: Settings = {
   // plain definition, and the plain definition is the commoner lookup.
   bookQuery: 'text',
   notesLabel: 'Notes',
-  diagnostics: false,
   clipFolder: DEFAULT_CLIP_FOLDER,
   refinements: DEFAULT_REFINEMENTS,
   lastBook: '',
@@ -222,7 +219,6 @@ export async function loadSettings(): Promise<Settings> {
       lens: typeof parsed.lens === 'string' && parsed.lens ? parsed.lens : DEFAULT_SETTINGS.lens,
       bookQuery: isBookQuery(parsed.bookQuery) ? parsed.bookQuery : DEFAULT_SETTINGS.bookQuery,
       notesLabel: cleanLabel(parsed.notesLabel) ?? DEFAULT_SETTINGS.notesLabel,
-      diagnostics: parsed.diagnostics === true,
       clipFolder:
         typeof parsed.clipFolder === 'string' && parsed.clipFolder.trim()
           ? parsed.clipFolder.trim()

@@ -45,7 +45,7 @@ import {
 } from './src/clip';
 import {hostOf, parse, type Block, type Page} from './src/html';
 import {asAddress} from './src/url';
-import {log, LOG_AVAILABLE, setDiagnostics} from './src/log';
+import {log, LOG_AVAILABLE} from './src/log';
 import {DENIED, ensureFileWrite, ensureNetwork} from './src/permissions';
 import {DEFAULT_LENS, LENSES, lensById, resolve, type Lens} from './src/search';
 import {
@@ -251,12 +251,6 @@ export default function App(): React.JSX.Element {
 
   /** Change a setting everywhere at once. */
   const change = useCallback((patch: Partial<Settings>) => {
-    // Diagnostics take effect on the tap, not on the next start: somebody
-    // turning it on is about to reproduce a fault, and asking them to restart
-    // the plugin first is how the interesting part goes unrecorded.
-    if (typeof patch.diagnostics === 'boolean') {
-      setDiagnostics(patch.diagnostics);
-    }
     setSettings(prev => {
       const updated = {...prev, ...patch};
       settingsRef.current = updated;
@@ -465,9 +459,6 @@ export default function App(): React.JSX.Element {
       }
       // After the permission, since the file lives in shared storage.
       const loaded = await loadSettings();
-      // Before anything else is recorded, so a session that is being diagnosed
-      // has its opening steps in the file too.
-      setDiagnostics(loaded.diagnostics);
       settingsRef.current = loaded;
       setSettings(loaded);
       // Before the lookup runs, not after: this is the whole point of

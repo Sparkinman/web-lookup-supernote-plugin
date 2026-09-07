@@ -21,9 +21,6 @@ import {
   sessionIsGood,
   testRoundTrip,
 } from './cloud';
-import {cloudPath} from './cloud';
-import {findFile} from './cloudfiles';
-import {fileInfo} from './settings';
 import {FolderPicker} from './FolderPicker';
 import {
   BOOK_QUERY_CHOICES,
@@ -238,31 +235,6 @@ export function SettingsScreen({
     }
   };
 
-  const runIdentity = async () => {
-    setBusy(true);
-    setCloudStatus('Hashing the book — an eighty-megabyte one takes a moment…');
-    try {
-      const info = await fileInfo(settings.lastBook);
-      if (!info) {
-        setCloudStatus('That book could not be read. Look something up in one first.');
-        return;
-      }
-      // Both, because they are different numbers and the difference is the
-      // point: the file's own hash is not what Supernote calls it.
-      const registered = await findFile(settings.cloudToken, cloudPath(settings.lastBook));
-      setCloudStatus(
-        `On this device: ${info.size} bytes, md5 ${info.md5}. ` +
-          (registered
-            ? `Supernote calls it ${registered.md5} (size ${registered.size}).`
-            : 'Supernote has no record of that file — is it synced?'),
-      );
-    } catch (err) {
-      setCloudStatus(err instanceof Error ? err.message : 'Could not hash it.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const runTest = async () => {
     setBusy(true);
     setCloudStatus('Creating a test digest, reading it back, then removing it…');
@@ -376,18 +348,6 @@ export function SettingsScreen({
               <Text style={styles.choiceLabel}>Put the original list back</Text>
             </TouchableOpacity>
           </View>
-        </Fold>
-
-        <Fold
-          title="Reporting a fault"
-          open={open === 'diagnostics'}
-          onToggle={() => fold('diagnostics')}>
-          <Check
-            on={settings.diagnostics}
-            label="Keep a record of what the plugin did"
-            hint="Writes Document/LookUp/log.txt. Leave off unless something is going wrong and you have been asked for it — then copy that file off the device"
-            onPress={() => onChange({diagnostics: !settings.diagnostics})}
-          />
         </Fold>
 
         <Fold title="Reading a book" open={open === 'book'} onToggle={() => fold('book')}>
@@ -537,16 +497,6 @@ export function SettingsScreen({
                   </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.choice, busy && styles.dim]}
-                  disabled={busy}
-                  onPress={() => void runIdentity()}>
-                  <Text style={styles.choiceLabel}>Check how the last book is identified</Text>
-                  <Text style={styles.choiceHint}>
-                    Reads its size and content hash, which is how Supernote names a source
-                    document. Nothing is sent anywhere.
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
                   style={styles.choice}
                   onPress={() => {
                     onChange({cloudToken: ''});
@@ -567,18 +517,28 @@ export function SettingsScreen({
             no browser here, because Android will not create one inside a plugin.
           </Text>
           <Text style={styles.help}>
-            Tap passages to choose them. The arrow at the right of a result opens that page
+            Tap passages to choose them, or use "Capture text" to take what is on screen into an
+            editor where you can trim it. The arrow at the right of a result opens that page
             instead.
           </Text>
           <Text style={styles.help}>
-            In a note: "Paste selected text" writes the passages onto the page, and "Insert links"
-            hangs links under your handwriting — one per page you chose, plus one to the picture
-            of what you kept.
+            In a note there are four ways to keep something. "Keep as clipping" puts a small mark
+            beside your handwriting: tap it and the text opens on the page, tap it again and it
+            folds away. "Paste selected text" writes the passage onto the page. "Insert link"
+            hangs a link under your handwriting, which opens in the device's own browser.
+            "Screenshot" saves a picture of what you were reading and links to it.
           </Text>
           <Text style={styles.help}>
-            In a book: nothing can be written into the book itself. The firmware refuses every
-            write into an open document, whichever API is asked, so excerpts are collected into
-            the note named above instead.
+            A clipping's words are kept by this plugin rather than inside the note, because the
+            firmware discards anything a plugin attaches to a mark on the page. The mark is found
+            by where it sits, and follows your handwriting if you move it — but a clipping will
+            not open on a different device.
+          </Text>
+          <Text style={styles.help}>
+            In a book nothing can be written into the book itself: the firmware refuses every
+            write into an open document, whichever API is asked. Excerpts go into Supernote's own
+            Digest instead, carrying the text and a link back to the page they came from, which
+            needs the account above.
           </Text>
         </Fold>
       </ScrollView>
