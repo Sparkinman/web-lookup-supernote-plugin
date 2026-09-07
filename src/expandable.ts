@@ -118,8 +118,22 @@ async function markOf(
     return '';
   }
   try {
-    const fetched = unwrap<Record<string, unknown>>(await PluginFileAPI.getElement(path, page, num));
-    return typeof fetched?.userData === 'string' ? fetched.userData : '';
+    const response = (await PluginFileAPI.getElement(path, page, num)) as
+      | LooseResponse<Record<string, unknown>>
+      | null
+      | undefined;
+    if (!response?.success || response.result == null) {
+      // Says which of the two it was, so a blank mark is never ambiguous
+      // between "the read failed" and "the write did not keep it".
+      log(`expandable: getElement(#${num}) failed — ${response?.error?.message ?? 'no reason given'}`);
+      return '';
+    }
+    const fetched = response.result;
+    if (typeof fetched.userData === 'string' && fetched.userData) {
+      return fetched.userData;
+    }
+    log(`expandable: getElement(#${num}) returned no mark; it carries ${Object.keys(fetched).join(', ')}`);
+    return '';
   } catch (err) {
     log(`expandable: reading the mark of #${num} threw — ${err instanceof Error ? err.message : String(err)}`);
     return '';
@@ -183,9 +197,10 @@ export async function placeIcon(
   if (!element) {
     return 'the element could not be made';
   }
-  element.pageNum = page;
-  element.layerNum = 0;
-  element.userData = `${ICON_MARK}${JSON.stringify({id, text})}`;
+  // Order matters. These are native-backed objects, and assigning the whole
+  // `textBox` struct appears to rebuild the element underneath -- a `userData`
+  // set before it did not survive the insert, while Collapse/Expand, which sets
+  // the box first and the mark second, keeps its own. So: box, then mark.
   element.textBox = {
     fontSize: ICON_FONT,
     textContentFull: label,
@@ -197,6 +212,8 @@ export async function placeIcon(
     textFrameStyle: 0,
     textEditable: 0,
   };
+  element.userData = `${ICON_MARK}${JSON.stringify({id, text})}`;
+  element.pageNum = page;
 
   let inserted = false;
   try {
@@ -417,9 +434,7 @@ async function draw(
   if (!element) {
     return;
   }
-  element.pageNum = page;
-  element.layerNum = 0;
-  element.userData = `${OPEN_MARK}${carried.id}`;
+  // Box first, mark second -- see placeIcon.
   element.textBox = {
     fontSize: TEXT_FONT,
     textContentFull: carried.text,
@@ -431,6 +446,8 @@ async function draw(
     textFrameStyle: 0,
     textEditable: 0,
   };
+  element.userData = `${OPEN_MARK}${carried.id}`;
+  element.pageNum = page;
 
   try {
     const response = (await PluginFileAPI.insertElements(path, page, [element])) as
