@@ -28,6 +28,7 @@ import {FolderPicker} from './FolderPicker';
 import {
   BOOK_QUERY_CHOICES,
   DEFAULT_REFINEMENTS,
+  LABEL_SUGGESTIONS,
   DEFAULT_SETTINGS,
   MAX_LABEL_LENGTH,
   MAX_REFINEMENTS,
@@ -321,6 +322,26 @@ export function SettingsScreen({
             <Text style={styles.choiceHint}>
               The words written under your handwriting that open what you kept.
             </Text>
+            {/* Shown rather than described. This device's font lacks some
+                symbols and Android draws a missing one as a box with a cross
+                through it -- so whichever of these renders here is one that
+                will render on the page. */}
+            <View style={styles.glyphs}>
+              {LABEL_SUGGESTIONS.map(glyph => (
+                <TouchableOpacity
+                  key={glyph}
+                  style={[styles.glyph, settings.notesLabel === glyph && styles.glyphOn]}
+                  onPress={() => onChange({notesLabel: glyph})}>
+                  <Text
+                    style={[
+                      styles.glyphText,
+                      settings.notesLabel === glyph && styles.onText,
+                    ]}>
+                    {glyph}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
           </View>
         </Fold>
 
@@ -583,6 +604,19 @@ const styles = StyleSheet.create({
   onText: {color: '#fff'},
 
   field: {marginBottom: 12},
+  glyphs: {flexDirection: 'row', flexWrap: 'wrap', marginTop: 8},
+  glyph: {
+    borderWidth: 2,
+    borderColor: '#000',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginRight: 8,
+    marginBottom: 8,
+    minWidth: 56,
+    alignItems: 'center',
+  },
+  glyphOn: {backgroundColor: '#000'},
+  glyphText: {fontSize: 22, color: '#000'},
   lines: {minHeight: 220, textAlignVertical: 'top'},
   fieldLabel: {fontSize: 17, fontWeight: '600', color: '#000', marginBottom: 6},
   fieldRow: {flexDirection: 'row', alignItems: 'stretch'},

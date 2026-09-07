@@ -5,8 +5,8 @@
   "desc": "Look something up on the web without leaving what you are reading. Lasso handwriting in a note, or select text in a book or PDF, and the selection becomes a web search. Results are fetched and shown as plain text you can read on the page you were already on. Choose the passages worth keeping and they go back into your note: a link to each page you chose, and a second link, named however you like, opening what you kept as text or as a picture of what you read. A book cannot be written into by a plugin, so a passage kept while reading one goes into the Digest instead, naming the book and page it came from - that needs your Supernote account, which the plugin uses to talk to Supernote directly and is entirely optional; everything else works without it. Your password is never stored, only the session it earns. Your search words are sent only to the search engine you choose - DuckDuckGo, Wikipedia or Wiby - and to the pages you then open, or to an address you type yourself. Network access fetches those pages and reaches Supernote; file access stores the clippings in Document/LookUp. Settings, including that session, are kept where only the plugin can read them.",
   "name": "Web Lookup",
   "author": "Sparkinman",
-  "versionCode": "56",
-  "versionName": "2.15.0",
+  "versionCode": "57",
+  "versionName": "2.15.1",
   "jsMainPath": "index",
   "uses-permissions": [
     "plugin.permission.INTERNET",

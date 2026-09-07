@@ -130,6 +130,8 @@ export default function App(): React.JSX.Element {
   const [range, setRange] = useState({start: 0, end: 0});
   /** Where the reader said the passage begins and ends, by tapping. */
   const [mark, setMark] = useState({start: 0, end: 0, hasStart: false, hasEnd: false});
+  /** Where the caret sits in the editor, for trimming from it. */
+  const [caret, setCaret] = useState(0);
   const [loading, setLoading] = useState(false);
   const [picked, setPicked] = useState<number[]>([]);
   const [status, setStatus] = useState<string | null>(null);
@@ -1196,6 +1198,29 @@ export default function App(): React.JSX.Element {
           <View style={styles.editorHead}>
             <Text style={styles.noteLabel}>Trim this to the part worth keeping</Text>
             <View style={styles.spacer} />
+            {/* Trimming from the caret, because dragging a selection does not
+                work on this display -- the handles appear and will not be
+                moved. Tapping puts the caret where you want the text to begin
+                or end, and these cut away the rest. */}
+            <TouchableOpacity
+              style={styles.btn}
+              onPress={() => {
+                noteTouched.current = true;
+                setUnsaved(true);
+                setNote(current => current.slice(caret).trimStart());
+                setCaret(0);
+              }}>
+              <Text style={styles.btnText}>Cut above</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.btn}
+              onPress={() => {
+                noteTouched.current = true;
+                setUnsaved(true);
+                setNote(current => current.slice(0, caret).trimEnd());
+              }}>
+              <Text style={styles.btnText}>Cut below</Text>
+            </TouchableOpacity>
             <TouchableOpacity
               style={styles.btn}
               onPress={() => {
@@ -1216,6 +1241,7 @@ export default function App(): React.JSX.Element {
               setUnsaved(true);
               setNote(value);
             }}
+            onSelectionChange={event => setCaret(event.nativeEvent.selection.start)}
             multiline
             autoFocus
             autoCorrect={false}

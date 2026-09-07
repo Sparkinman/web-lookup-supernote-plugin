@@ -162,6 +162,29 @@ export const BOOK_QUERY_CHOICES: {value: BookQuery; label: string; hint: string}
   },
 ];
 
+/**
+ * Candidates for the label on the link that opens what you kept.
+ *
+ * Offered as a row to be looked at rather than described, because this device's
+ * font does not have every symbol and Android draws a missing one as a box with
+ * a cross through it. A glyph that renders in the picker will render on the
+ * page; one that comes up as a box is the answer to whether it can be used.
+ */
+export const LABEL_SUGGESTIONS = [
+  'Notes',
+  'Note',
+  '▤',
+  '☰',
+  '≡',
+  '⊞',
+  '⊕',
+  '✎',
+  '✚',
+  '★',
+  '►',
+  '•••',
+];
+
 /** Long enough to be descriptive, short enough to sit under the handwriting. */
 export const MAX_LABEL_LENGTH = 24;
 
