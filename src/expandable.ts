@@ -32,7 +32,7 @@ import {PluginCommAPI, PluginFileAPI, PluginNoteAPI} from 'sn-plugin-lib';
 
 import type {Anchor, Rect} from './capture';
 import type {Clipping} from './clippings';
-import {addClipping, allClippings, clippingAt, updateClipping} from './clippings';
+import {addClipping, clippingAt, clippingsInNote, updateClipping} from './clippings';
 import {log} from './log';
 
 interface LooseResponse<T> {
@@ -52,8 +52,17 @@ const ICON_FONT = 44;
 /** What marks the text an icon has opened, so it can be found and shut. */
 export const OPEN_MARK = 'weblookup-open:';
 
-/** How far outside an icon a tap still counts. Fingers are not precise. */
-const HIT_PAD = 30;
+/**
+ * Whether a tap is already being dealt with.
+ *
+ * One tap does several things that are not instant: it reads the page, writes
+ * an element, reloads the file and saves the store. A second tap arriving in
+ * the middle read the store before the first had finished writing it, decided
+ * the clipping was still shut, and opened a second copy -- or opened and shut
+ * in the wrong order, so that several taps appeared to do nothing at all.
+ * Taps that arrive mid-flight are dropped: the finger is faster than the file.
+ */
+let working = false;
 
 /** Where opened text is drawn, and the room it may take. */
 const GAP = 16;
@@ -73,7 +82,7 @@ const MARGIN = 120;
 /**
  * A box that fits its label.
  *
- * A fixed square is right for one glyph and wrong for a word: "Paul" in a
+ * A fixed square is right for one glyph and wrong for a word: a name in a
  * seventy-pixel box at forty-four point has nowhere to go but downwards, one
  * letter per line. The device reports no text metrics, so the width is
  * estimated generously -- too wide costs nothing, too narrow stacks it.
@@ -377,7 +386,11 @@ function centre(r: Rect): {x: number; y: number} {
  * alone rather than being attached to somebody else's.
  */
 async function reconcile(path: string, page: number): Promise<void> {
-  const mine = (await allClippings()).filter(c => c.path === path && c.page === page);
+  // Every clipping in this note, not only the ones recorded on this page.
+  // Handwriting and its pencil can be cut and pasted onto another page, and a
+  // clipping that only ever looked at the page it was made on went silent the
+  // moment that happened.
+  const mine = await clippingsInNote(path);
   if (mine.length === 0) {
     return;
   }
@@ -400,8 +413,14 @@ async function reconcile(path: string, page: number): Promise<void> {
     }
   }
 
-  const strayClippings = mine.filter(c => !pencils.some(p => samePlace(p, c.rect)));
-  const strayPencils = pencils.filter(p => !mine.some(c => samePlace(p, c.rect)));
+  // A clipping already sitting where it says it is on this page is settled.
+  // One recorded on another page is a candidate: it may have been moved here.
+  const strayClippings = mine.filter(
+    c => !(c.page === page && pencils.some(p => samePlace(p, c.rect))),
+  );
+  const strayPencils = pencils.filter(
+    p => !mine.some(c => c.page === page && samePlace(p, c.rect)),
+  );
   if (strayClippings.length === 0 || strayPencils.length === 0) {
     return;
   }
@@ -425,7 +444,7 @@ async function reconcile(path: string, page: number): Promise<void> {
     const moved = spare.splice(best, 1)[0];
     const dx = moved.left - clipping.rect.left;
     const dy = moved.top - clipping.rect.top;
-    const patch: Partial<Clipping> = {rect: moved};
+    const patch: Partial<Clipping> = {rect: moved, page};
     if (clipping.openRect) {
       patch.openRect = {
         left: clipping.openRect.left + dx,
@@ -434,8 +453,14 @@ async function reconcile(path: string, page: number): Promise<void> {
         bottom: clipping.openRect.bottom + dy,
       };
     }
+    // The opened text does not follow a move between pages, so a clipping
+    // that lands on a new page is treated as shut: its old text, if any, is
+    // still on the page it came from and is the user's to remove.
+    if (clipping.page !== page) {
+      patch.openRect = undefined;
+      patch.openText = undefined;
+    }
     await updateClipping(clipping.id, patch);
-    log(`expandable: ${clipping.id} moved to ${moved.left},${moved.top}`);
   }
 }
 
@@ -444,10 +469,21 @@ export async function tapped(x: number, y: number): Promise<void> {
   // that never fired, which is exactly the ambiguity that wasted a round.
   log(`tap: ${Math.round(x)},${Math.round(y)}`);
 
+  if (working) {
+    return;
+  }
+  working = true;
+  try {
+    await handleTap(x, y);
+  } finally {
+    working = false;
+  }
+}
+
+async function handleTap(x: number, y: number): Promise<void> {
   const path = unwrap<string>(await PluginCommAPI.getCurrentFilePath());
   const page = unwrap<number>(await PluginCommAPI.getCurrentPageNum());
   if (!path || typeof page !== 'number' || !/\.note$/i.test(path)) {
-    log(`tap: not a note (${path ?? 'no path'})`);
     return;
   }
 

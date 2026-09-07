@@ -1,10 +1,16 @@
 /**
- * Diagnostic logging to a file that can be copied off the device.
+ * Diagnostics, off in a released build.
  *
- * Every entry goes to two places: `console.log`, for when a cable happens to be
- * attached, and Document/LookUp/log.txt, for when one is not. The file is the
- * one that matters — a crash tears down the plugin view before anything on
- * screen can be read, but whatever reached the file is still there afterwards.
+ * While this plugin was being built, every step wrote a line to
+ * Document/LookUp/log.txt so a failure on the device could be read afterwards
+ * -- there is no console on a Supernote, and a crash tears the plugin view
+ * down before anything on screen can be read. That file has no place in
+ * somebody else's Document folder, so a release writes nothing at all.
+ *
+ * The call sites are left in place and cost a comparison each. Turning
+ * `DIAGNOSTICS` back on and rebuilding restores the whole trace, which is far
+ * easier than putting the instrumentation back when something needs
+ * diagnosing.
  */
 
 import {NativeModules} from 'react-native';
@@ -16,7 +22,12 @@ interface LogStore {
   location(): Promise<string>;
 }
 
-const store: LogStore | undefined = NativeModules.LookUpLog;
+/** Set true to write Document/LookUp/log.txt again while diagnosing. */
+const DIAGNOSTICS = false;
+
+const store: LogStore | undefined = DIAGNOSTICS
+  ? (NativeModules.LookUpLog as LogStore | undefined)
+  : undefined;
 
 /**
  * Write one line.
@@ -28,6 +39,9 @@ const store: LogStore | undefined = NativeModules.LookUpLog;
  * than no diagnostic.
  */
 export function log(line: string): void {
+  if (!DIAGNOSTICS) {
+    return;
+  }
   console.log(`[LookUp] ${line}`);
   store?.append(line)?.catch(() => {});
 }
@@ -39,6 +53,9 @@ export function log(line: string): void {
  * itself; the last `->` line in the file is where execution stopped.
  */
 export async function step<T>(name: string, fn: () => Promise<T>): Promise<T> {
+  if (!DIAGNOSTICS) {
+    return fn();
+  }
   log(`-> ${name}`);
   try {
     const value = await fn();

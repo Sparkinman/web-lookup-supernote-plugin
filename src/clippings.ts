@@ -43,7 +43,7 @@ const MAX_TEXT = 8000;
 const MAX_CLIPPINGS = 300;
 
 /** How far from a stored rectangle a tap still counts as being on it. */
-const SLOP = 30;
+const SLOP = 40;
 
 export interface Clipping {
   id: string;
@@ -134,6 +134,11 @@ function within(rect: Rect | undefined, x: number, y: number): boolean {
     y >= rect.top - SLOP &&
     y <= rect.bottom + SLOP
   );
+}
+
+/** Every clipping belonging to this note, whichever page it was made on. */
+export async function clippingsInNote(path: string): Promise<Clipping[]> {
+  return (await allClippings()).filter(c => c.path === path);
 }
 
 /** Whichever clipping's icon is under the finger, if any. */

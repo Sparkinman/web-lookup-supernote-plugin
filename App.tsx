@@ -59,7 +59,6 @@ import {
 } from './src/settings';
 import {addBookDigest, calibrate, isExpired, sessionIsGood} from './src/cloud';
 import {placeIcon} from './src/expandable';
-import {dumpPage} from './src/pageprobe';
 import {SettingsScreen} from './src/Settings';
 import {get, openExternally, postForm, WEB_AVAILABLE} from './src/web';
 import {
@@ -165,11 +164,32 @@ export default function App(): React.JSX.Element {
    * a paragraph somebody has cut down by hand exists nowhere else, and closing
    * the panel is the one action here that cannot be taken back.
    */
-  const [unsaved, setUnsaved] = useState(false);
+  // The ref is what every decision reads; this only forces a repaint.
+  const [, setUnsaved] = useState(false);
   /** A question that must be answered before the thing behind it happens. */
   const [confirm, setConfirm] = useState<{question: string; act: () => void} | null>(null);
   /** The same flag for callbacks registered once, which never see it change. */
   const unsavedRef = useRef(false);
+
+  /**
+   * Say whether there is unkept text, now rather than on the next render.
+   *
+   * The flag was mirrored into the ref during render, which meant that after
+   * it was cleared the ref still read true until React came round again --
+   * long enough for a second button press, or the close that follows keeping
+   * something, to ask about discarding work that had just been kept. Anything
+   * that clears it says so immediately, and every question reads the ref.
+   */
+  const markUnsaved = useCallback(() => {
+    unsavedRef.current = true;
+    setUnsaved(true);
+  }, []);
+
+  const clearUnsaved = useCallback(() => {
+    unsavedRef.current = false;
+    setUnsaved(false);
+  }, []);
+
   /** The highlight drift is measured once a run; it does not change. */
   const calibrated = useRef(false);
   /**
@@ -378,7 +398,6 @@ export default function App(): React.JSX.Element {
           );
           // Round A: read the page and print what is on it. Writes nothing.
           if (captured.isNote) {
-            void dumpPage();
           }
           // The last book is remembered because a book lookup needs to name it.
           if (!captured.isNote && settingsRef.current.lastBook !== captured.source.path) {
@@ -485,7 +504,7 @@ export default function App(): React.JSX.Element {
           setConfirm({
             question: 'You have text you have not kept. Start a new lookup anyway?',
             act: () => {
-              setUnsaved(false);
+              clearUnsaved();
               void startFromButton(buttonId);
             },
           });
@@ -493,7 +512,7 @@ export default function App(): React.JSX.Element {
         }
         void startFromButton(buttonId);
       }),
-    [startFromButton],
+    [clearUnsaved, startFromButton],
   );
 
   /** The management screen's settings button, pressed while the panel is up. */
@@ -595,17 +614,15 @@ export default function App(): React.JSX.Element {
    * Android window costs a full e-ink refresh to appear and another to go, on
    * a screen where that is the slowest thing there is.
    */
-  unsavedRef.current = unsaved;
-
   const guard = useCallback(
     (question: string, act: () => void) => {
-      if (!unsaved) {
+      if (!unsavedRef.current) {
         act();
         return;
       }
       setConfirm({question, act});
     },
-    [unsaved],
+    [],
   );
 
   const finish = useCallback(() => {
@@ -664,7 +681,7 @@ export default function App(): React.JSX.Element {
     if (!previous) {
       // Nothing left to go back to, so this leaves. Answer it here rather than
       // letting the panel close over unkept work.
-      if (unsaved) {
+      if (unsavedRef.current) {
         setConfirm({
           question: 'You have text you have not kept. Leave anyway?',
           act: () => PluginManager.closePluginView(),
@@ -676,7 +693,7 @@ export default function App(): React.JSX.Element {
     setHistory(prev => prev.slice(0, -1));
     open(previous);
     return true;
-  }, [history, open, unsaved]);
+  }, [history, open]);
 
   /** Hardware/system back should walk the reader's history before closing. */
   useEffect(() => {
@@ -792,7 +809,7 @@ export default function App(): React.JSX.Element {
           );
           log(`digest: created ${id} from ${anchor.fileName}`);
           setPicked([]);
-          setUnsaved(false);
+          clearUnsaved();
           setNote('');
           noteTouched.current = false;
           setEditingNote(false);
@@ -814,7 +831,7 @@ export default function App(): React.JSX.Element {
       setPicked([]);
       // Cleared, not merely flagged as kept: the next lookup asked whether to
       // discard text that had already been written into the note.
-      setUnsaved(false);
+      clearUnsaved();
       setNote('');
       noteTouched.current = false;
       setEditingNote(false);
@@ -823,7 +840,7 @@ export default function App(): React.JSX.Element {
     } finally {
       setBusy(false);
     }
-  }, [anchor, chosenText, chosenUrls, finish, note, page, picked, query, selection, settings]);
+  }, [anchor, chosenText, chosenUrls, clearUnsaved, finish, note, page, picked, query, selection, settings]);
 
   /**
    * Draw the chosen passages as an image and hang it off the handwriting.
@@ -885,7 +902,7 @@ export default function App(): React.JSX.Element {
         return;
       }
       setPicked([]);
-      setUnsaved(false);
+      clearUnsaved();
       setNote('');
       noteTouched.current = false;
       setStatus('Links inserted.');
@@ -893,7 +910,7 @@ export default function App(): React.JSX.Element {
     } finally {
       setBusy(false);
     }
-  }, [anchor, chosenUrls, finish, note, page, picked, query, settings, url]);
+  }, [anchor, chosenUrls, clearUnsaved, finish, note, page, picked, query, settings, url]);
 
   /**
    * Read the passages on screen into the editor.
@@ -935,12 +952,12 @@ export default function App(): React.JSX.Element {
     // before it goes.
     guard('Replace the text you have not kept yet?', () => {
       noteTouched.current = true;
-      setUnsaved(true);
+      markUnsaved();
       setNote(shown);
       setEditingNote(true);
       setStatus('Captured what is on screen — trim it, then keep it.');
     });
-  }, [chosenText, guard, selectedText, visibleText]);
+  }, [chosenText, guard, markUnsaved, selectedText, visibleText]);
 
   /**
    * Fold what was kept into a pencil on the page.
@@ -984,7 +1001,7 @@ export default function App(): React.JSX.Element {
       // Cleared for the same reason Paste clears: the next lookup used to ask
       // whether to discard text that had already been kept.
       setPicked([]);
-      setUnsaved(false);
+      clearUnsaved();
       setNote('');
       noteTouched.current = false;
       setEditingNote(false);
@@ -993,7 +1010,7 @@ export default function App(): React.JSX.Element {
     } finally {
       setBusy(false);
     }
-  }, [anchor, chosenText, finish, note, selectedText, settings, visibleText]);
+  }, [anchor, chosenText, clearUnsaved, finish, note, selectedText, settings, visibleText]);
 
   /** Photograph the reader as it stands, and hang the picture off the writing. */
   const screenshot = useCallback(async () => {
@@ -1016,7 +1033,10 @@ export default function App(): React.JSX.Element {
         tag,
         chosenUrls(),
         mode,
-        labelOr(settings.notesLabel, DEFAULT_SETTINGS.notesLabel),
+        // Named for what it opens. This used to carry the clipping label, so
+        // a picture of the reader arrived in the note under whatever mark the
+        // user had chosen for something else entirely.
+        'Screenshot',
         settings.clipFolder,
       );
       if (failure) {
@@ -1271,7 +1291,7 @@ export default function App(): React.JSX.Element {
               style={styles.btn}
               onPress={() => {
                 noteTouched.current = true;
-                setUnsaved(true);
+                markUnsaved();
                 setNote(current => current.slice(caret).trimStart());
                 setCaret(0);
               }}>
@@ -1281,7 +1301,7 @@ export default function App(): React.JSX.Element {
               style={styles.btn}
               onPress={() => {
                 noteTouched.current = true;
-                setUnsaved(true);
+                markUnsaved();
                 setNote(current => current.slice(0, caret).trimEnd());
               }}>
               <Text style={styles.btnText}>Cut below</Text>
@@ -1303,7 +1323,7 @@ export default function App(): React.JSX.Element {
             value={note}
             onChangeText={value => {
               noteTouched.current = true;
-              setUnsaved(true);
+              markUnsaved();
               setNote(value);
             }}
             onSelectionChange={event => setCaret(event.nativeEvent.selection.start)}
@@ -1470,7 +1490,7 @@ export default function App(): React.JSX.Element {
               style={[styles.insert, busy && styles.btnOff]}
               onPress={clip}
               disabled={busy}>
-              <Text style={styles.insertText}>Insert links</Text>
+              <Text style={styles.insertText}>Insert link</Text>
             </TouchableOpacity>
           )}
           </View>
