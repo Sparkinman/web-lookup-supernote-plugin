@@ -903,12 +903,13 @@ export default function App(): React.JSX.Element {
    * in a note and in a book, so there is one behaviour to learn and one to
    * test.
    */
-  const captureText = useCallback(() => {
-    // Three sources, narrowest first: a real selection, then whatever was
-    // tapped, then what happens to be on screen. Each is a more deliberate
-    // statement of intent than the one after it.
-    // Marked first, since two taps are a statement; then a live selection, for
-    // the word a double-tap catches.
+  /**
+   * What the reader has actually singled out, if anything.
+   *
+   * Marked first, since two taps are a statement; then a live selection, for
+   * the word a double-tap catches.
+   */
+  const selectedText = useCallback(() => {
     const text = pageAsText();
     const marked =
       selecting && mark.hasStart && mark.hasEnd && mark.end > mark.start
@@ -916,8 +917,14 @@ export default function App(): React.JSX.Element {
         : '';
     const dragged =
       selecting && range.end > range.start ? text.slice(range.start, range.end).trim() : '';
-    const selected = marked || dragged;
-    const shown = selected || chosenText() || visibleText();
+    return marked || dragged;
+  }, [mark, pageAsText, range, selecting]);
+
+  const captureText = useCallback(() => {
+    // Three sources, narrowest first: a real selection, then whatever was
+    // tapped, then what happens to be on screen. Each is a more deliberate
+    // statement of intent than the one after it.
+    const shown = selectedText() || chosenText() || visibleText();
     if (!shown) {
       setStatus('Nothing selected or on screen to capture yet.');
       return;
@@ -933,7 +940,7 @@ export default function App(): React.JSX.Element {
       setEditingNote(true);
       setStatus('Captured what is on screen — trim it, then keep it.');
     });
-  }, [chosenText, guard, mark, pageAsText, range, selecting, visibleText]);
+  }, [chosenText, guard, selectedText, visibleText]);
 
   /**
    * Fold what was kept into a pencil on the page.
@@ -953,11 +960,13 @@ export default function App(): React.JSX.Element {
       return;
     }
     // The draft first, exactly as Paste does: an edit made above is the point
-    // of offering one. Nothing is placed for an empty clipping -- a pencil that
-    // opens onto nothing is worse than no pencil.
-    const text = (note.trim() || chosenText()).trim();
+    // of offering one. Then the same ladder Capture uses, so this button works
+    // on its own -- requiring a passage to have been tapped first meant the
+    // button was hidden at the moment it was wanted, and a lookup ended with
+    // no way to keep what was on screen.
+    const text = (note.trim() || selectedText() || chosenText() || visibleText()).trim();
     if (!text) {
-      setStatus('Nothing to keep yet — capture or choose some text first.');
+      setStatus('Nothing on screen to keep yet.');
       return;
     }
     setBusy(true);
@@ -984,7 +993,7 @@ export default function App(): React.JSX.Element {
     } finally {
       setBusy(false);
     }
-  }, [anchor, chosenText, finish, note, settings]);
+  }, [anchor, chosenText, finish, note, selectedText, settings, visibleText]);
 
   /** Photograph the reader as it stands, and hang the picture off the writing. */
   const screenshot = useCallback(async () => {
@@ -1448,7 +1457,7 @@ export default function App(): React.JSX.Element {
               <Text style={styles.insertText}>Screenshot</Text>
             </TouchableOpacity>
           )}
-          {anchor?.isNote && (picked.length > 0 || note.trim().length > 0) && (
+          {anchor?.isNote && (
             <TouchableOpacity
               style={[styles.insert, busy && styles.btnOff]}
               onPress={() => void keepAsClipping()}
