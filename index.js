@@ -15,6 +15,7 @@ import {name as appName} from './app.json';
 import {PluginManager} from 'sn-plugin-lib';
 import {versionName, versionCode} from './PluginConfig.json';
 import {log, startSession} from './src/log';
+import {tapped} from './src/expandable';
 
 // MUST come before PluginManager.init() — init depends on the registered component.
 // Root wraps the panel in an error boundary so a crash shows on the device
@@ -92,6 +93,48 @@ PluginManager.registerButton(3, ['DOC'], {
   icon: ICON,
   showType: 1,
 });
+
+/**
+ * Touches on the note, whether or not this plugin's view is up.
+ *
+ * This is what makes a clipping open where it sits: a finger tap on one of our
+ * icons writes its words onto the page, and another takes them away, with the
+ * plugin never appearing. Only DOWN and UP matter; MOVE and CANCEL are noise.
+ *
+ * A pen touch is ignored on purpose -- a pen is drawing, and reacting to it
+ * would fight the person holding it -- and so is anything that moved between
+ * down and up, which is a drag rather than a tap.
+ */
+const TAP_SLOP = 24;
+let downAt = null;
+
+try {
+  PluginManager.registerMotionListener(1, {
+    onMsg(message) {
+      const finger = message?.toolType === 1 && message?.pointerCount === 1;
+      if (message?.action === 0) {
+        downAt = finger ? {x: message.x, y: message.y} : null;
+        return;
+      }
+      if (message?.action !== 1 || !downAt || !finger) {
+        downAt = null;
+        return;
+      }
+      const from = downAt;
+      downAt = null;
+      if (
+        Math.abs(message.x - from.x) > TAP_SLOP ||
+        Math.abs(message.y - from.y) > TAP_SLOP
+      ) {
+        return;
+      }
+      tapped(message.x, message.y).catch(err => log(`tap: ${err?.message ?? err}`));
+    },
+  });
+  log('motion listener registered');
+} catch (err) {
+  log(`motion listener failed: ${err?.message ?? err}`);
+}
 
 /**
  * The settings entry on the device's plugin management screen.

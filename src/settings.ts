@@ -117,7 +117,7 @@ export const DEFAULT_SETTINGS: Settings = {
   // The selection alone: adding the book's title helps a quotation and hurts a
   // plain definition, and the plain definition is the commoner lookup.
   bookQuery: 'text',
-  notesLabel: 'Notes',
+  notesLabel: '✎',
   clipFolder: DEFAULT_CLIP_FOLDER,
   refinements: DEFAULT_REFINEMENTS,
   lastBook: '',

@@ -58,6 +58,7 @@ import {
   type Settings,
 } from './src/settings';
 import {addBookDigest, calibrate, isExpired, sessionIsGood} from './src/cloud';
+import {insertExpandable} from './src/expandable';
 import {SettingsScreen} from './src/Settings';
 import {get, openExternally, postForm, WEB_AVAILABLE} from './src/web';
 import {
@@ -861,6 +862,24 @@ export default function App(): React.JSX.Element {
     setBusy(true);
     setStatus('Inserting…');
     try {
+      // The words on the page behind an icon, when there are words to carry.
+      // A finger tap on it writes them out beside it and another takes them
+      // away, which is the whole point: no picture, no page turned, no plugin.
+      if (draft && anchor.isNote && anchor.rect) {
+        const under = anchor.rect.bottom + 80;
+        const refused = await insertExpandable(
+          anchor,
+          labelOr(settings.notesLabel, DEFAULT_SETTINGS.notesLabel),
+          draft,
+          under,
+        );
+        if (refused) {
+          log(`expandable refused: ${refused}`);
+          setStatus(`Could not place the icon: ${refused}`);
+          return;
+        }
+      }
+
       const failure = await attachClip(anchor, {
         mode,
         title: page.title || query,
@@ -873,6 +892,9 @@ export default function App(): React.JSX.Element {
         sourceUrls: chosenUrls(chosen ?? undefined),
         notesLabel: labelOr(settings.notesLabel, DEFAULT_SETTINGS.notesLabel),
         folder: settings.clipFolder,
+        // The picture is redundant once the icon carries the words, unless the
+        // page link is the only thing wanted from this.
+        drawPicture: !(draft && anchor.isNote && anchor.rect),
       });
       if (failure) {
         log(`clip failed: ${failure}`);
