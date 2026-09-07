@@ -38,6 +38,7 @@ import {
 import {
   attachClip,
   attachScreenshot,
+  capturePage,
   CLIP_AVAILABLE,
   insertPassages,
   type ClipSection,
@@ -106,6 +107,19 @@ export default function App(): React.JSX.Element {
    */
   const [anchor, setAnchor] = useState<Anchor | null>(null);
   const [busy, setBusy] = useState(false);
+  /**
+   * The note as it will be saved, open to being edited first.
+   *
+   * Tapping chooses whole passages, which is the right size for a stylus and
+   * the wrong size for a quotation -- a paragraph is kept to get at one
+   * sentence of it. Rather than build a text selection the platform cannot read
+   * back, what was chosen is offered as text and can be cut down before it goes
+   * anywhere.
+   */
+  const [note, setNote] = useState('');
+  const [editingNote, setEditingNote] = useState(false);
+  /** Whether the draft has been touched, so choosing again does not overwrite it. */
+  const noteTouched = useRef(false);
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [showSettings, setShowSettings] = useState(false);
   /** The part of the panel a screenshot photographs: the reader, not the chrome. */
@@ -224,22 +238,27 @@ export default function App(): React.JSX.Element {
   const startFromButton = useCallback(
     async (buttonId: number | null) => {
       log(`start: button=${buttonId}`);
-      // Whatever the panel was showing, it is looking something up now.
+
+      // Cleared before anything else, and for every way in. The panel is
+      // mounted once and shown again rather than rebuilt, so whatever was on it
+      // last -- a settings screen, the previous search -- is still there when
+      // it reappears, and reads as the press having done nothing.
       setShowSettings(false);
-
-      if (buttonId === TOOLBAR_BUTTON) {
-        log('toolbar entry, no capture');
-        return;
-      }
-
-      // A new selection is a new lookup; leaving the previous results up made
-      // it look as though the press had done nothing.
       setPage(null);
+      setSelection('');
       setUrl(null);
       setHistory([]);
       setPicked([]);
       setAnchor(null);
       setStatus(null);
+      setNote('');
+      setEditingNote(false);
+      noteTouched.current = false;
+
+      if (buttonId === TOOLBAR_BUTTON) {
+        log('toolbar entry, no capture');
+        return;
+      }
 
       let capturedAnchor: Anchor | null = null;
       try {
@@ -351,6 +370,35 @@ export default function App(): React.JSX.Element {
    * frame leaves the reader with no chance to say it worked before the page
    * underneath comes back.
    */
+  /**
+   * What the chosen passages say, in document order.
+   *
+   * Shared by the draft and by what is written, so what is saved is what was
+   * read on screen rather than a second composition of the same thing.
+   */
+  const chosenText = useCallback((): string => {
+    if (!page) {
+      return '';
+    }
+    return [...picked]
+      .sort((a, b) => a - b)
+      .map(i => blockText(page.blocks[i]))
+      .filter(Boolean)
+      .join('\n\n');
+  }, [page, picked]);
+
+  /**
+   * Keep the draft in step with what has been chosen, until it is edited.
+   *
+   * Once somebody has cut a paragraph down to the sentence they wanted,
+   * choosing another passage must add to that rather than throw it away.
+   */
+  useEffect(() => {
+    if (!noteTouched.current) {
+      setNote(chosenText());
+    }
+  }, [chosenText]);
+
   const finish = useCallback(() => {
     setTimeout(() => PluginManager.closePluginView(), CLOSE_DELAY);
   }, []);
@@ -428,11 +476,9 @@ export default function App(): React.JSX.Element {
       return;
     }
     // Document order, not the order they happened to be tapped in.
-    const text = [...picked]
-      .sort((a, b) => a - b)
-      .map(i => blockText(page.blocks[i]))
-      .filter(Boolean)
-      .join('\n\n');
+    // The draft, not a fresh composition of the chosen blocks: an edit made
+    // above is the whole point of offering one.
+    const text = (note.trim() || chosenText()).trim();
     if (!text) {
       return;
     }
@@ -499,7 +545,7 @@ export default function App(): React.JSX.Element {
     } finally {
       setBusy(false);
     }
-  }, [anchor, chosenUrls, finish, page, picked, query, selection, settings]);
+  }, [anchor, chosenText, chosenUrls, finish, note, page, picked, query, selection, settings]);
 
   /**
    * Draw the chosen passages as an image and hang it off the handwriting.
@@ -563,16 +609,38 @@ export default function App(): React.JSX.Element {
     }
   }, [anchor, chosenUrls, finish, page, picked, query, settings, url]);
 
-  /** Photograph the reader as it stands and hang that off the writing. */
+  /** Photograph the reader as it stands. */
   const screenshot = useCallback(async () => {
-    if (!anchor) {
-      return;
-    }
     const tag = findNodeHandle(readerRef.current);
     if (tag === null) {
       setStatus('There is nothing on screen to capture.');
       return;
     }
+
+    // From a book there is nothing to hang a link on, so the picture is simply
+    // kept and its path named in the note. What is captured is what is on
+    // screen: the reader draws the page's text and never its images, so a
+    // picture in the original article is not in the capture either -- there is
+    // nothing on screen for it to be.
+    if (!anchor?.isNote) {
+      setBusy(true);
+      setStatus('Capturing…');
+      try {
+        const drawn = await capturePage(tag, settings.clipFolder);
+        if (!drawn) {
+          setStatus('The page could not be captured.');
+          return;
+        }
+        log(`capture: ${drawn.path} (${drawn.width}x${drawn.height})`);
+        noteTouched.current = true;
+        setNote(current => `${current}${current ? '\n\n' : ''}Picture: ${drawn.path}`);
+        setStatus('Captured — its path is in the text.');
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+
     const mode = captureMode(settings);
     if (!mode) {
       setStatus('Nothing to insert — turn on the clipping or the page link in Settings.');
@@ -733,6 +801,37 @@ export default function App(): React.JSX.Element {
       </View>
 
       {page && page.blocks.length > 0 && (
+        <>
+        {editingNote ? (
+          <View style={styles.noteBox}>
+            <Text style={styles.noteLabel}>
+              What will be kept — trim it to the part you want
+            </Text>
+            <TextInput
+              style={styles.noteInput}
+              value={note}
+              onChangeText={value => {
+                noteTouched.current = true;
+                setNote(value);
+              }}
+              multiline
+              autoCorrect={false}
+            />
+            <View style={styles.footerButtons}>
+              <TouchableOpacity
+                style={styles.btn}
+                onPress={() => {
+                  noteTouched.current = false;
+                  setNote(chosenText());
+                }}>
+                <Text style={styles.btnText}>Reset</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.btn} onPress={() => setEditingNote(false)}>
+                <Text style={styles.btnText}>Done</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : null}
         <View style={styles.footer}>
           {/* On its own line above the buttons. Sharing a row with them, a long
               message -- and a refusal is always long -- pushed every button off
@@ -752,6 +851,13 @@ export default function App(): React.JSX.Element {
               <Text style={styles.btnText}>Clear</Text>
             </TouchableOpacity>
           )}
+          {picked.length > 0 && (
+            <TouchableOpacity
+              style={styles.btn}
+              onPress={() => setEditingNote(v => !v)}>
+              <Text style={styles.btnText}>{editingNote ? 'Hide text' : 'Edit text'}</Text>
+            </TouchableOpacity>
+          )}
           {picked.length > 0 && anchor && (
             <TouchableOpacity style={styles.insert} onPress={insert} disabled={busy}>
               <Text style={styles.insertText}>
@@ -760,12 +866,14 @@ export default function App(): React.JSX.Element {
 
             </TouchableOpacity>
           )}
-          {anchor?.isNote && CLIP_AVAILABLE && (
+          {CLIP_AVAILABLE && (
             <TouchableOpacity
               style={[styles.insert, busy && styles.btnOff]}
               onPress={screenshot}
               disabled={busy}>
-              <Text style={styles.insertText}>Screenshot</Text>
+              <Text style={styles.insertText}>
+                {anchor?.isNote ? 'Screenshot' : 'Capture page'}
+              </Text>
             </TouchableOpacity>
           )}
           {anchor?.isNote && CLIP_AVAILABLE && (
@@ -778,6 +886,7 @@ export default function App(): React.JSX.Element {
           )}
           </View>
         </View>
+        </>
       )}
     </View>
   );
@@ -979,6 +1088,20 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   footerButtons: {flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', marginTop: 6},
+  // Tall enough to work in, bounded so the reader behind it is still visible.
+  noteBox: {borderTopWidth: 2, borderTopColor: '#000', paddingHorizontal: 12, paddingVertical: 8},
+  noteLabel: {fontSize: 15, color: '#000', marginBottom: 6},
+  noteInput: {
+    borderWidth: 2,
+    borderColor: '#000',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    fontSize: 16,
+    color: '#000',
+    minHeight: 120,
+    maxHeight: 320,
+    textAlignVertical: 'top',
+  },
   footer: {
     alignItems: 'stretch',
     paddingHorizontal: 12,

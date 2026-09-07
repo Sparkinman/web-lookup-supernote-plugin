@@ -144,6 +144,25 @@ export async function attachClip(
 }
 
 /**
+ * Photograph the reader and keep the file, without touching any note.
+ *
+ * For a book, where there is nothing to hang a link on: the picture is saved
+ * where clippings go and its path handed back, so it can be named in the digest
+ * and opened from the file browser afterwards.
+ */
+export async function capturePage(viewTag: number, folder: string): Promise<Drawn | null> {
+  if (!native) {
+    return null;
+  }
+  try {
+    return await native.captureView(viewTag, `page-${Date.now()}`, folder);
+  } catch (err) {
+    log(`capture failed (${err instanceof Error ? err.message : String(err)})`);
+    return null;
+  }
+}
+
+/**
  * Photograph the reader as it stands, then link to that.
  *
  * For when the shape of what is on screen carries meaning that the passages
