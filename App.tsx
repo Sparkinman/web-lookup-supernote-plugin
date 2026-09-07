@@ -299,6 +299,9 @@ export default function App(): React.JSX.Element {
       // it reappears, and reads as the press having done nothing.
       setShowSettings(false);
       setPage(null);
+      // The box too. A passage from the last lookup left in it is a long thing
+      // to delete by hand before typing something else.
+      setQuery('');
       setSelection('');
       setUrl(null);
       setHistory([]);
@@ -660,7 +663,10 @@ export default function App(): React.JSX.Element {
 
   /** Write the chosen passages into the note the lookup started from. */
   const insert = useCallback(async () => {
-    if (!page || !anchor || picked.length === 0) {
+    // A draft counts, not only tapped passages. Capture fills the draft
+    // without picking anything, and the button that keeps it was hidden --
+    // so text could be captured, edited, and then had nowhere to go.
+    if (!page || !anchor || (picked.length === 0 && !note.trim())) {
       return;
     }
     // Document order, not the order they happened to be tapped in.
@@ -903,18 +909,20 @@ export default function App(): React.JSX.Element {
       {confirm ? (
         <View style={styles.confirm}>
           <Text style={styles.confirmText}>{confirm.question}</Text>
-          <View style={styles.footerButtons}>
+          <View style={styles.confirmRow}>
+            {/* Cancel first and set like a real button. It was second, in the
+                plain style, and read as a caption rather than a way out. */}
+            <TouchableOpacity style={styles.confirmCancel} onPress={() => setConfirm(null)}>
+              <Text style={styles.confirmCancelText}>Cancel</Text>
+            </TouchableOpacity>
             <TouchableOpacity
-              style={styles.insert}
+              style={styles.confirmGo}
               onPress={() => {
                 const act = confirm.act;
                 setConfirm(null);
                 act();
               }}>
-              <Text style={styles.insertText}>Yes, discard it</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.btn} onPress={() => setConfirm(null)}>
-              <Text style={styles.btnText}>Keep editing</Text>
+              <Text style={styles.confirmGoText}>Discard</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -927,15 +935,42 @@ export default function App(): React.JSX.Element {
           <Text style={styles.btnText}>‹ Back</Text>
         </TouchableOpacity>
 
-        <TextInput
-          style={styles.input}
-          value={query}
-          onChangeText={setQuery}
-          onSubmitEditing={() => search(query, lensRef.current)}
-          placeholder="Search, or type an address"
-          returnKeyType="search"
-          autoCorrect={false}
-        />
+        <View style={styles.inputWrap}>
+          <TextInput
+            style={styles.input}
+            value={query}
+            onChangeText={setQuery}
+            onSubmitEditing={() => search(query, lensRef.current)}
+            placeholder="Search, or type an address"
+            returnKeyType="search"
+            autoCorrect={false}
+          />
+          {query.length > 0 ? (
+            <TouchableOpacity style={styles.clear} onPress={() => setQuery('')}>
+              <Text style={styles.clearText}>✕</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+
+        {/* Says where a plain word would go if this is pressed, and takes it
+            there. Typing an address is recognised on its own, but only when it
+            looks like one -- this asks for it outright, so a bare host or a
+            site whose name reads like a search is never guessed wrong. */}
+        <TouchableOpacity
+          style={styles.goBtn}
+          onPress={() => {
+            const typed = query.trim();
+            if (!typed) {
+              return;
+            }
+            const address = /^https?:\/\//i.test(typed) ? typed : `https://${typed}`;
+            log(`address: ${address}`);
+            setHistory([]);
+            setResultPage(1);
+            void open(address);
+          }}>
+          <Text style={styles.goText}>https://</Text>
+        </TouchableOpacity>
 
         {/* No Settings button here. Settings open from the device's plugin
             management screen, beside the install and the permissions, which is
@@ -1099,14 +1134,14 @@ export default function App(): React.JSX.Element {
               <Text style={styles.btnText}>Clear</Text>
             </TouchableOpacity>
           )}
-          {picked.length > 0 && (
+          {(picked.length > 0 || note.trim().length > 0) && (
             <TouchableOpacity
               style={styles.btn}
               onPress={() => setEditingNote(v => !v)}>
               <Text style={styles.btnText}>{editingNote ? 'Hide text' : 'Edit text'}</Text>
             </TouchableOpacity>
           )}
-          {picked.length > 0 && anchor && (
+          {(picked.length > 0 || note.trim().length > 0) && anchor && (
             <TouchableOpacity style={styles.insert} onPress={insert} disabled={busy}>
               <Text style={styles.insertText}>
                 {anchor.isNote ? 'Paste selected text' : 'Add to Digest'}
@@ -1235,6 +1270,17 @@ const styles = StyleSheet.create({
   btn: {paddingHorizontal: 14, paddingVertical: 12},
   btnOff: {opacity: 0.35},
   btnText: {fontSize: 18, color: '#000', fontWeight: '600'},
+  inputWrap: {flex: 1, flexDirection: 'row', alignItems: 'center'},
+  clear: {paddingHorizontal: 12, paddingVertical: 10, marginLeft: -46},
+  clearText: {fontSize: 22, color: '#000'},
+  goBtn: {
+    borderWidth: 2,
+    borderColor: '#000',
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    marginLeft: 6,
+  },
+  goText: {fontSize: 15, color: '#000', fontWeight: '700'},
   input: {
     flex: 1,
     borderWidth: 2,
@@ -1363,7 +1409,22 @@ const styles = StyleSheet.create({
     borderBottomWidth: 2,
     borderBottomColor: '#000',
   },
-  confirmText: {fontSize: 17, color: '#fff', marginBottom: 6},
+  confirmText: {fontSize: 17, color: '#fff', marginBottom: 8},
+  confirmRow: {flexDirection: 'row', alignItems: 'center'},
+  confirmCancel: {
+    backgroundColor: '#fff',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    marginRight: 10,
+  },
+  confirmCancelText: {fontSize: 18, color: '#000', fontWeight: '700'},
+  confirmGo: {
+    borderWidth: 2,
+    borderColor: '#fff',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+  },
+  confirmGoText: {fontSize: 18, color: '#fff', fontWeight: '700'},
   editor: {flex: 1, paddingHorizontal: 12, paddingVertical: 8},
   editorHead: {flexDirection: 'row', alignItems: 'center', marginBottom: 6},
   // Kept mounted rather than unmounted: the reader holds the scroll position
