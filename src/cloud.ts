@@ -331,7 +331,9 @@ export async function createDigest(token: string, digest: NewDigest): Promise<st
   // digests show theirs.
   const payload: Record<string, unknown> = {
     content,
-    uniqueIdentifier: `${Date.now().toString(16)}${Math.floor(Math.random() * 1e12).toString(16)}`,
+    // Deliberately absent. Every digest the device makes carries a null here,
+    // and the server accepts a row without one, so setting it marks ours as
+    // unlike anything the tablet wrote for no benefit.
     md5Hash: await native!.hash('MD5', content),
     // Empty strings rather than absent. A real row carries "" for each of
     // these, and a null is not the same thing to whatever renders them.

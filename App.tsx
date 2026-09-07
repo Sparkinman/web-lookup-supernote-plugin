@@ -128,6 +128,16 @@ export default function App(): React.JSX.Element {
   /** The part of the panel a screenshot photographs: the reader, not the chrome. */
   const readerRef = useRef<View>(null);
   /**
+   * The scrolling list of passages.
+   *
+   * Held so it can be sent back to the top when the page underneath it
+   * changes. Without that, following a link from halfway down a result list
+   * leaves the scroll exactly where it was: the new page has loaded, but what
+   * is on screen is a hundred lines into it, or past its end entirely if it is
+   * shorter than the last one. It reads as the link having failed.
+   */
+  const scrollRef = useRef<ScrollView>(null);
+  /**
    * The lens a button-started lookup should use.
    *
    * A ref rather than the `lens` state because the lookup is kicked off from
@@ -206,6 +216,10 @@ export default function App(): React.JSX.Element {
 
       setUrl(response.finalUrl);
       setPage(parsed);
+      // Before anything is drawn, so the page is never briefly shown from the
+      // middle. `animated: false` because this is e-ink: a smooth scroll is a
+      // sequence of full-screen repaints.
+      scrollRef.current?.scrollTo({y: 0, animated: false});
       if (parsed.blocks.length === 0) {
         setStatus('Nothing readable on that page. Try opening it in the viewer.');
       }
@@ -788,7 +802,10 @@ export default function App(): React.JSX.Element {
 
       <View style={styles.body} ref={readerRef} collapsable={false}>
         {page && page.blocks.length > 0 ? (
-          <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollInner}>
+          <ScrollView
+            ref={scrollRef}
+            style={styles.scroll}
+            contentContainerStyle={styles.scrollInner}>
             {page.blocks.map((block, index) => (
               <Passage
                 key={`${index}-${block.text.slice(0, 24)}`}
