@@ -31,7 +31,8 @@
 import {PluginCommAPI, PluginFileAPI, PluginNoteAPI} from 'sn-plugin-lib';
 
 import type {Anchor, Rect} from './capture';
-import {addClipping, clippingAt, updateClipping} from './clippings';
+import type {Clipping} from './clippings';
+import {addClipping, allClippings, clippingAt, updateClipping} from './clippings';
 import {log} from './log';
 
 interface LooseResponse<T> {
@@ -294,7 +295,7 @@ export async function placeIcon(
 
   // The words go to our own store, keyed by where the icon sits. The element
   // cannot carry them: `userData` is discarded by the firmware.
-  await addClipping({id, path, page, rect, text});
+  await addClipping({id, path, page, rect, label, text});
 
   // The save happened before the write, never here: saving now would push the
   // plugin's stale cached page back over the element just inserted.
@@ -335,6 +336,92 @@ export async function placeIcon(
  * nothing. Still no saveCurrentNote anywhere, and the page is counted either
  * side of every write so the log says whether anything went missing.
  */
+/** Two rectangles in the same place, allowing for rounding. */
+function samePlace(a: Rect, b: Rect): boolean {
+  return Math.abs(a.left - b.left) <= 2 && Math.abs(a.top - b.top) <= 2;
+}
+
+function centre(r: Rect): {x: number; y: number} {
+  return {x: (r.left + r.right) / 2, y: (r.top + r.bottom) / 2};
+}
+
+/**
+ * Follow the pencils that have been moved.
+ *
+ * A clipping is found by where its icon sits, so dragging the handwriting and
+ * the icon somewhere else leaves the stored rectangle pointing at bare paper
+ * and the pencil stops answering. This reads the page, pairs each stored
+ * clipping that is no longer where it was with a pencil on the page that
+ * nothing claims, and moves the record to match. The opened text, if any, is
+ * shifted by the same amount, since it travels with the icon.
+ *
+ * Nearest first, so the pairing is stable when several have moved at once.
+ * A clipping whose pencil has been rubbed out finds no partner and is left
+ * alone rather than being attached to somebody else's.
+ */
+async function reconcile(path: string, page: number): Promise<void> {
+  const mine = (await allClippings()).filter(c => c.path === path && c.page === page);
+  if (mine.length === 0) {
+    return;
+  }
+  const elements = unwrap<Record<string, unknown>[]>(await PluginFileAPI.getElements(page, path));
+  if (!Array.isArray(elements)) {
+    return;
+  }
+
+  // Only boxes reading exactly what one of our icons reads. The opened text is
+  // a text element too, and is not a candidate.
+  const labels = new Set(mine.map(c => c.label));
+  const pencils: Rect[] = [];
+  for (const element of elements) {
+    if (Number(element.type) !== TYPE_TEXT) {
+      continue;
+    }
+    const box = element.textBox as {textRect?: Rect; textContentFull?: string} | undefined;
+    if (box?.textRect && labels.has(String(box.textContentFull ?? ''))) {
+      pencils.push(box.textRect);
+    }
+  }
+
+  const strayClippings = mine.filter(c => !pencils.some(p => samePlace(p, c.rect)));
+  const strayPencils = pencils.filter(p => !mine.some(c => samePlace(p, c.rect)));
+  if (strayClippings.length === 0 || strayPencils.length === 0) {
+    return;
+  }
+
+  const spare = [...strayPencils];
+  for (const clipping of strayClippings) {
+    if (spare.length === 0) {
+      break;
+    }
+    const from = centre(clipping.rect);
+    let best = 0;
+    let bestDistance = Infinity;
+    for (let i = 0; i < spare.length; i += 1) {
+      const to = centre(spare[i]);
+      const distance = (to.x - from.x) ** 2 + (to.y - from.y) ** 2;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = i;
+      }
+    }
+    const moved = spare.splice(best, 1)[0];
+    const dx = moved.left - clipping.rect.left;
+    const dy = moved.top - clipping.rect.top;
+    const patch: Partial<Clipping> = {rect: moved};
+    if (clipping.openRect) {
+      patch.openRect = {
+        left: clipping.openRect.left + dx,
+        top: clipping.openRect.top + dy,
+        right: clipping.openRect.right + dx,
+        bottom: clipping.openRect.bottom + dy,
+      };
+    }
+    await updateClipping(clipping.id, patch);
+    log(`expandable: ${clipping.id} moved to ${moved.left},${moved.top}`);
+  }
+}
+
 export async function tapped(x: number, y: number): Promise<void> {
   // Said on every tap. A silent handler cannot be told apart from a listener
   // that never fired, which is exactly the ambiguity that wasted a round.
@@ -350,7 +437,14 @@ export async function tapped(x: number, y: number): Promise<void> {
   // Identification happens entirely in our own store: no page read, nothing
   // asked of the element, and so nothing that depends on a field the firmware
   // throws away. A tap that hits no clipping costs one small file read.
-  const clipping = await clippingAt(path, page, x, y);
+  // The cheap path first: a pencil that has not moved needs no page read at
+  // all. Only a miss pays for one, and only then to see whether something was
+  // dragged since it was last seen.
+  let clipping = await clippingAt(path, page, x, y);
+  if (!clipping) {
+    await reconcile(path, page);
+    clipping = await clippingAt(path, page, x, y);
+  }
   if (!clipping) {
     log('tap: nothing of ours under it');
     return;
@@ -445,20 +539,48 @@ async function draw(
   const width = size?.width ?? 1920;
   const height = size?.height ?? 2560;
 
-  const left = Math.min(iconRect.left, width - MARGIN - 400);
+  // Margin to margin, not from the icon rightwards. Starting at the icon gave
+  // a pencil near the right edge a four-hundred-pixel column, and a thousand
+  // characters needed two and a half pages of it -- the box was clamped at the
+  // page edge and the tail was simply cut off. The full width holds the same
+  // thousand characters in about ten lines.
+  const left = MARGIN;
   const right = width - MARGIN;
-  const top = iconRect.bottom + GAP;
+
   // No text metrics are reported, so the height is estimated from an average
   // character width. Too tall costs nothing, where too short clips the tail.
   const perLine = Math.max(10, Math.floor((right - left) / (TEXT_FONT * 0.5)));
-  const lines = text
-    .split('\n')
-    .reduce((total, line) => total + Math.max(1, Math.ceil(line.length / perLine)), 0);
-  const bottom = Math.min(height - MARGIN, top + Math.round(lines * TEXT_FONT * 1.5) + TEXT_FONT);
-  if (bottom - top < TEXT_FONT) {
-    log('expandable: no room below the icon to open it');
+  const linesFor = (body: string) =>
+    body
+      .split('\n')
+      .reduce((total, line) => total + Math.max(1, Math.ceil(line.length / perLine)), 0);
+  const heightFor = (body: string) => Math.round(linesFor(body) * TEXT_FONT * 1.5) + TEXT_FONT;
+
+  // Below the icon by preference, but lifted up the page when what is being
+  // opened will not fit there. Never past the top margin.
+  const needed = heightFor(text);
+  const room = height - MARGIN;
+  let top = iconRect.bottom + GAP;
+  if (top + needed > room) {
+    top = Math.max(MARGIN, room - needed);
+  }
+  const available = room - top;
+  if (available < TEXT_FONT * 2) {
+    log('expandable: no room on this page to open it');
     return;
   }
+
+  // A clipping longer than a whole page cannot be shown whole. Better to show
+  // what fits and say so than to write a box the page silently truncates: the
+  // words themselves are safe in the store either way.
+  let shown = text;
+  if (needed > available) {
+    const fits = Math.max(1, Math.floor((available - TEXT_FONT) / (TEXT_FONT * 1.5)));
+    shown = `${text.slice(0, Math.max(1, fits * perLine - 2)).trimEnd()}…`;
+    log(`expandable: only ${shown.length} of ${text.length} characters fit on this page`);
+  }
+
+  const bottom = Math.min(room, top + heightFor(shown));
   const openRect: Rect = {left, top, right, bottom};
 
   const element = unwrap<Record<string, unknown>>(await PluginCommAPI.createElement(TYPE_TEXT));
@@ -467,7 +589,7 @@ async function draw(
   }
   element.textBox = {
     fontSize: TEXT_FONT,
-    textContentFull: text,
+    textContentFull: shown,
     textRect: openRect,
     textAlign: 0,
     textBold: 0,

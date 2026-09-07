@@ -52,6 +52,8 @@ export interface Clipping {
   page: number;
   /** Where the icon sits. The whole means of finding it again. */
   rect: Rect;
+  /** What the icon reads, so it can be recognised after it has been moved. */
+  label: string;
   /** The words the icon carries. */
   text: string;
   /** Where the opened text sits, while it is open. Absent when shut. */
