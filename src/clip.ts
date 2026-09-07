@@ -103,13 +103,6 @@ export interface ClipRequest {
   notesLabel: string;
   /** Where the drawn image is written, from settings. */
   folder: string;
-  /**
-   * Whether to draw the clipping at all.
-   *
-   * False once an icon on the page carries the same words: a picture of them
-   * as well would be a second copy to keep in step with the first.
-   */
-  drawPicture?: boolean;
 }
 
 /**
@@ -125,7 +118,7 @@ export async function attachClip(
   if (refusal) {
     return refusal;
   }
-  if (request.mode === 'link' || request.drawPicture === false) {
+  if (request.mode === 'link') {
     // Nothing to draw: the user has asked for a link to the page and no picture
     // of it, so drawing one would leave an orphaned file behind.
     return attachImage(anchor, null, request.sourceUrls, request.notesLabel);
