@@ -74,6 +74,14 @@ async function call(
       `Supernote answered ${response.status} with something that was not JSON.`,
     );
   }
+  // Logged before it is judged. An earlier sign-in failed in a way nothing
+  // recorded, and the reply was the only thing that would have said why.
+  log(
+    `cloud: ${path} -> ${response.status} ` +
+      JSON.stringify(body, (key, value) =>
+        key === 'token' && typeof value === 'string' ? `<${value.length} chars>` : value,
+      ).slice(0, 700),
+  );
   if (body.success === false) {
     const message = String(body.errorMsg ?? `Supernote refused ${path}.`);
     throw new Error(
@@ -86,14 +94,22 @@ async function call(
 }
 
 /**
- * Step one of signing in: offer the password, ask for the emailed code.
+ * Step one of signing in: offer the password, then ask for the emailed code.
  *
  * The plain password never crosses the wire. The server hands out a nonce, the
  * password is MD5-hexed, the nonce appended, and that SHA-256-hexed -- which is
- * why signing in is two requests rather than one.
+ * why signing in is more than one request.
+ *
+ * Asking for the code is three further calls, not a field on the login reply,
+ * which is what an earlier version assumed and why no email ever arrived.
+ * Logging in answers `errorCode` E1760 to mean "this account wants a code";
+ * the endpoint that sends one is signed with a key the server hides inside a
+ * token it hands out, where the token's last character is an index into its own
+ * dash-separated parts and the part at that index is what gets hashed with the
+ * address. None of that is guessable, and all of it is required.
  *
  * Resolves either a token, when the account needs no verification, or the two
- * values to hand back with the emailed code.
+ * values to hand back with the code.
  */
 export async function beginSignIn(
   email: string,
@@ -121,6 +137,7 @@ export async function beginSignIn(
     equipment: '1',
     loginMethod: '1',
     timestamp,
+    language: 'en',
   });
 
   const token = String(result.token ?? '');
@@ -128,15 +145,44 @@ export async function beginSignIn(
     log('cloud: signed in without a code');
     return {token};
   }
-  const validCodeKey = String(result.validCodeKey ?? '');
+  if (result.errorCode !== 'E1760') {
+    throw new Error(String(result.errorMsg ?? 'Supernote refused those details.'));
+  }
+
+  // A code is wanted, and asking for one is signed.
+  const preAuth = await call('POST', 'user/validcode/pre-auth', {account});
+  const preToken = String(preAuth.token ?? '');
+  const index = Number(preToken.slice(-1));
+  const parts = preToken.split('-');
+  const realKey = Number.isInteger(index) ? parts[index] : undefined;
+  if (!preToken || realKey === undefined) {
+    throw new Error(
+      'Supernote returned a verification token in a shape this version does not recognise.',
+    );
+  }
+
+  const sign = await native!.hash('SHA-256', `${account}${realKey}`);
+  const sent = await call('POST', 'user/mail/validcode/send', {
+    email: account,
+    timestamp,
+    token: preToken,
+    sign,
+  });
+  const validCodeKey = String(sent.validCodeKey ?? '');
   if (!validCodeKey) {
-    throw new Error(String(result.errorMsg ?? 'Supernote would not sign this account in.'));
+    throw new Error(String(sent.errorMsg ?? 'Supernote would not send a verification code.'));
   }
   log('cloud: a code has been emailed');
-  return {validCodeKey, timestamp: result.timestamp ?? timestamp};
+  return {validCodeKey, timestamp};
 }
 
-/** Step two: the code from the email. */
+/**
+ * Step two: the code from the email.
+ *
+ * `email` rather than `account`, `equipment` 4 rather than 1, and the code
+ * upper-cased -- these are not the same argument names the first step uses, and
+ * the wrong ones are refused without saying which.
+ */
 export async function finishSignIn(
   email: string,
   code: string,
@@ -144,18 +190,21 @@ export async function finishSignIn(
   timestamp: unknown,
 ): Promise<string> {
   const result = await call('POST', 'official/user/sms/login', {
-    countryCode: 1,
-    account: email.trim(),
-    validCode: code.trim(),
+    email: email.trim(),
+    validCode: code.trim().toUpperCase(),
     validCodeKey,
     timestamp,
     browser: 'Chrome107',
-    equipment: '1',
-    loginMethod: '1',
+    equipment: '4',
   });
   const token = String(result.token ?? '');
   if (!token) {
-    throw new Error(String(result.errorMsg ?? 'That code was not accepted.'));
+    throw new Error(
+      String(
+        result.errorMsg ??
+          'That code was not accepted. They expire quickly, so ask for a new one if it has been more than a few minutes.',
+      ),
+    );
   }
   log('cloud: signed in with the emailed code');
   return token;
