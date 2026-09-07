@@ -545,3 +545,100 @@ export async function sessionIsGood(token: string): Promise<boolean | null> {
     return null;
   }
 }
+
+
+/**
+ * Work out how the device counts the positions in a digest.
+ *
+ * Our offsets are right for `getCurrentDocText`: asked for 175..500 the page
+ * text really does read "And Judas said…" to "…so he will do." But the device
+ * highlights ten characters later at the start and twenty later at the end, so
+ * it counts against a shorter string than the one it hands out -- something in
+ * the page, line breaks or the inline verse numbers, is not counted where we
+ * count it. The drift grows with position, so there is no constant to subtract.
+ *
+ * A digest the device made is the answer key: it records the page, the exact
+ * text, and where that text starts. Finding the same text in the same page and
+ * comparing the two numbers gives the relationship outright rather than by
+ * guesswork. Reads only.
+ */
+export async function calibrate(
+  token: string,
+  bookPath: string,
+  currentPage: number,
+  pageText: string,
+): Promise<string> {
+  const wanted = cloudPath(bookPath);
+  const rows = await listDigests(token);
+
+  const mine: {page: number; content: string; start: number; end: number}[] = [];
+  for (const row of rows) {
+    if (String(row.sourcePath ?? '') !== wanted) {
+      continue;
+    }
+    // Only the device's own: ours were written with our own arithmetic and
+    // would confirm nothing but itself.
+    if (row.uniqueIdentifier) {
+      continue;
+    }
+    try {
+      const metadata = JSON.parse(String(row.metadata ?? '{}')) as Record<string, unknown>;
+      const spots = JSON.parse(String(metadata.document_location_data ?? '[]')) as {
+        page?: number;
+        startPosition?: number;
+        endPosition?: number;
+      }[];
+      const spot = spots[0];
+      if (!spot || typeof spot.startPosition !== 'number' || typeof spot.page !== 'number') {
+        continue;
+      }
+      mine.push({
+        page: spot.page,
+        content: String(row.content ?? ''),
+        start: spot.startPosition,
+        end: spot.endPosition ?? spot.startPosition,
+      });
+    } catch {
+      // A row whose metadata will not parse tells us nothing.
+    }
+  }
+
+  if (mine.length === 0) {
+    return 'No digest the device made was found for this book.';
+  }
+
+  log(`calibrate: ${mine.length} device-made digest(s) in this book`);
+  for (const entry of mine) {
+    log(`calibrate: page ${entry.page} says ${entry.start}..${entry.end} for "${entry.content.slice(0, 60)}"`);
+  }
+
+  const here = mine.filter(entry => entry.page === currentPage);
+  if (here.length === 0) {
+    const pages = mine.map(entry => entry.page).join(', ');
+    return `None on this page. Open the book at page ${pages} and press this again.`;
+  }
+
+  const lines: string[] = [];
+  for (const entry of here) {
+    const escaped = entry.content
+      .trim()
+      .split(/\s+/)
+      .map(word => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+      .join('\\s+');
+    const found = new RegExp(escaped).exec(pageText);
+    if (!found) {
+      log(`calibrate: "${entry.content.slice(0, 40)}" is not in this page's text at all`);
+      lines.push('one digest\'s text is not in the page text');
+      continue;
+    }
+    const ours = found.index;
+    const oursEnd = ours + found[0].length;
+    log(
+      `calibrate: device ${entry.start}..${entry.end}, ours ${ours}..${oursEnd}, ` +
+        `difference ${entry.start - ours}..${entry.end - oursEnd}, ` +
+        `page text ${pageText.length} chars, content ${entry.content.length}`,
+    );
+    lines.push(`device ${entry.start}..${entry.end}, ours ${ours}..${oursEnd}`);
+  }
+  return lines.join('; ');
+}
