@@ -225,18 +225,29 @@ export async function positionInPage(
       log('position: the selection was not found in the page text');
       return null;
     }
-    const start = found.index;
-    const end = start + found[0].length;
+    // The device counts the same page with its line breaks removed. Measured
+    // against two digests it wrote itself: on one, our start was 18 past its
+    // 176 and there were exactly 18 newlines before that point; on the other,
+    // 3 past and 3 newlines, with 3 more inside the passage accounting for the
+    // end being 6 out rather than 3. Both agree to the character.
+    //
+    // So each position drops by however many line breaks precede it, which is
+    // why the drift grew with distance into the page and no constant fitted.
+    const breaksBefore = (offset: number) =>
+      (text.slice(0, offset).match(/\n/g) ?? []).length;
+    const rawStart = found.index;
+    const rawEnd = rawStart + found[0].length;
+    const start = rawStart - breaksBefore(rawStart);
+    const end = rawEnd - breaksBefore(rawEnd);
     // Logged with the page text either side of it. A highlight that lands late
     // or early is an offset counted against a slightly different string than
     // the device counts against, and the only way to see which is to print what
     // is actually at the offsets being sent.
     log(
-      `position: ${start}..${end} of ${text.length} — before[${JSON.stringify(
-        text.slice(Math.max(0, start - 30), start),
-      )}] at[${JSON.stringify(text.slice(start, start + 40))}] end[${JSON.stringify(
-        text.slice(Math.max(0, end - 40), end),
-      )}]`,
+      `position: sending ${start}..${end} (found at ${rawStart}..${rawEnd} of ${text.length}, ` +
+        `${breaksBefore(rawEnd)} line breaks up to the end) — at[${JSON.stringify(
+          text.slice(rawStart, rawStart + 40),
+        )}]`,
     );
     return {start, end};
   } catch (err) {
