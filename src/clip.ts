@@ -727,6 +727,13 @@ async function freshPage(notePath: string): Promise<number | string> {
       }
       log(`digest: createNote rejected template "${template}" — ${last}`);
     }
+    if (/not allowed to use this API/i.test(last)) {
+      // The firmware gates writes on the app in front, not on the plugin: from
+      // inside a book, creating a note is refused whatever template is offered.
+      // Writing into a note that already exists is a separate permission and
+      // may well be allowed, so say the one thing that might make this work.
+      return `this device will not let a plugin create a note while a book is open — make ${notePath} once in the Note app and this will append to it`;
+    }
     return `the lookup note could not be created (${last})`;
   }
 
@@ -788,7 +795,13 @@ async function templateCandidates(): Promise<string[]> {
   return candidates;
 }
 
-/** How many pages the note has, or null when there is no such note yet. */
+/**
+ * How many pages the note has, or null when it cannot be read.
+ *
+ * Logged in full rather than swallowed. "No such note" and "this app may not
+ * ask" are the same null here and want opposite responses -- one is fixed by
+ * creating the note, the other cannot be fixed from inside a book at all.
+ */
 async function noteLength(notePath: string): Promise<number | null> {
   try {
     const response = (await PluginFileAPI.getNoteTotalPageNum(notePath)) as
@@ -796,10 +809,13 @@ async function noteLength(notePath: string): Promise<number | null> {
       | null
       | undefined;
     if (!response?.success || typeof response.result !== 'number') {
+      log(`digest: getNoteTotalPageNum(${notePath}) -> ${JSON.stringify(response ?? null)}`);
       return null;
     }
+    log(`digest: ${notePath} has ${response.result} page(s)`);
     return response.result;
-  } catch {
+  } catch (err) {
+    log(`digest: getNoteTotalPageNum threw — ${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
 }

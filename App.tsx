@@ -48,16 +48,14 @@ import {log, LOG_AVAILABLE} from './src/log';
 import {DENIED, ensureFileWrite, ensureNetwork} from './src/permissions';
 import {DEFAULT_LENS, LENSES, lensById, resolve, type Lens} from './src/search';
 import {
-  BOOK_QUERY_CHOICES,
   captureMode,
   DEFAULT_SETTINGS,
   labelOr,
   loadSettings,
-  MAX_LABEL_LENGTH,
   saveSettings,
   type Settings,
 } from './src/settings';
-import {FolderPicker} from './src/FolderPicker';
+import {SettingsScreen} from './src/Settings';
 import {get, openExternally, WEB_AVAILABLE} from './src/web';
 import {
   onButtonPress,
@@ -68,6 +66,15 @@ import {
 
 /** How long the confirmation stays up before the panel closes, in milliseconds. */
 const CLOSE_DELAY = 700;
+
+/**
+ * How many passages a clipping takes when none were chosen.
+ *
+ * "Insert links" with nothing picked means "keep this page", and a page can run
+ * to a thousand paragraphs. Beyond this the drawing is unreadable, slow to
+ * make, and too tall for the image viewer to open.
+ */
+const MAX_UNPICKED = 25;
 
 /** Button ids, matching index.js. */
 const TOOLBAR_BUTTON = 100;
@@ -92,8 +99,6 @@ export default function App(): React.JSX.Element {
   const [busy, setBusy] = useState(false);
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [showSettings, setShowSettings] = useState(false);
-  /** Which setting the folder browser is currently choosing for, if any. */
-  const [picking, setPicking] = useState<'clips' | 'digest' | null>(null);
   /** The part of the panel a screenshot photographs: the reader, not the chrome. */
   const readerRef = useRef<View>(null);
   /**
@@ -201,6 +206,8 @@ export default function App(): React.JSX.Element {
   const startFromButton = useCallback(
     async (buttonId: number | null) => {
       log(`start: button=${buttonId}`);
+      // Whatever the panel was showing, it is looking something up now.
+      setShowSettings(false);
 
       if (buttonId === TOOLBAR_BUTTON) {
         log('toolbar entry, no capture');
@@ -466,11 +473,9 @@ export default function App(): React.JSX.Element {
       return;
     }
     const chosen = picked.length > 0 ? [...picked].sort((a, b) => a - b) : null;
-    // Every block that goes into the clipping, so a whole-page clip of a result
-    // list links the results themselves. Linking the search that found them
-    // instead was the thing that made "Source URL" open a page of ten answers
-    // rather than the one that was kept.
-    const kept = chosen ?? page.blocks.map((_, i) => i);
+    // Capped, because a page can be enormous: an unpicked clip of one article
+    // ran to 1,315 passages and drew an image 113,000 pixels tall.
+    const kept = chosen ?? page.blocks.map((_, i) => i).slice(0, MAX_UNPICKED);
     // Each passage carries its own address, so a clipping of several results
     // says which one said what.
     const sections: ClipSection[] = kept
@@ -499,7 +504,10 @@ export default function App(): React.JSX.Element {
         // Two lines: where the lookup started, then where the text came from.
         source: [reference(anchor), page.viewerUrl ?? url ?? ''].filter(Boolean).join('\n'),
         sections,
-        sourceUrls: chosenUrls(kept),
+        // Only what was chosen. Passing every clipped block put a link under the
+        // handwriting for each of them -- six identical "7esl.com" labels from
+        // one article -- where what is wanted is the page that was read.
+        sourceUrls: chosenUrls(chosen ?? undefined),
         notesLabel: labelOr(settings.notesLabel, DEFAULT_SETTINGS.notesLabel),
         folder: settings.clipFolder,
       });
@@ -574,6 +582,19 @@ export default function App(): React.JSX.Element {
     }
   }, [page, url]);
 
+  // A screen of its own. Drawn inline above the reader it sat on top of every
+  // search that followed, took half the display and could not be dismissed.
+  if (showSettings) {
+    return (
+      <SettingsScreen
+        settings={settings}
+        onChange={change}
+        onDone={() => setShowSettings(false)}
+        onClose={() => PluginManager.closePluginView()}
+      />
+    );
+  }
+
   return (
     <View style={styles.root}>
       <View style={styles.bar}>
@@ -641,131 +662,6 @@ export default function App(): React.JSX.Element {
           {reference(anchor)}
         </Text>
       ) : null}
-
-      {showSettings && (
-        <ScrollView style={styles.settings}>
-          <Text style={styles.settingsTitle}>What insertion leaves in the note</Text>
-          <TouchableOpacity
-            style={[styles.choice, settings.savePicture && styles.choiceOn]}
-            onPress={() => change({savePicture: !settings.savePicture})}>
-            <Text style={[styles.choiceLabel, settings.savePicture && styles.pickedText]}>
-              {settings.savePicture ? '☑ ' : '☐ '}A picture of what you kept
-            </Text>
-            <Text style={[styles.choiceHint, settings.savePicture && styles.pickedText]}>
-              Drawn from the passages and linked, so it survives the page changing
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.choice, settings.sourceLink && styles.choiceOn]}
-            onPress={() => change({sourceLink: !settings.sourceLink})}>
-            <Text style={[styles.choiceLabel, settings.sourceLink && styles.pickedText]}>
-              {settings.sourceLink ? '☑ ' : '☐ '}A link to the page on the web
-            </Text>
-            <Text style={[styles.choiceHint, settings.sourceLink && styles.pickedText]}>
-              Stays current, and can rot — turn it off to keep the note offline
-            </Text>
-          </TouchableOpacity>
-
-          <Text style={styles.settingsTitle}>What to search when reading a book</Text>
-          {BOOK_QUERY_CHOICES.map(choice => (
-            <TouchableOpacity
-              key={choice.value}
-              style={[
-                styles.choice,
-                settings.bookQuery === choice.value && styles.choiceOn,
-              ]}
-              onPress={() => change({bookQuery: choice.value})}>
-              <Text
-                style={[
-                  styles.choiceLabel,
-                  settings.bookQuery === choice.value && styles.pickedText,
-                ]}>
-                {settings.bookQuery === choice.value ? '● ' : '○ '}
-                {choice.label}
-              </Text>
-              <Text
-                style={[
-                  styles.choiceHint,
-                  settings.bookQuery === choice.value && styles.pickedText,
-                ]}>
-                {choice.hint}
-              </Text>
-            </TouchableOpacity>
-          ))}
-
-          <Text style={styles.settingsTitle}>What the saved clipping is called</Text>
-          <TextInput
-            style={styles.field}
-            value={settings.notesLabel}
-            onChangeText={value => change({notesLabel: value})}
-            maxLength={MAX_LABEL_LENGTH}
-            placeholder={DEFAULT_SETTINGS.notesLabel}
-            autoCorrect={false}
-          />
-          <Text style={styles.choiceHint}>
-            The words written under your handwriting that open what you kept.
-          </Text>
-
-          <Text style={styles.settingsTitle}>Where book excerpts are collected</Text>
-          <TextInput
-            style={styles.field}
-            value={settings.digestNote}
-            onChangeText={value => change({digestNote: value})}
-            placeholder={DEFAULT_SETTINGS.digestNote}
-            autoCorrect={false}
-          />
-          <TouchableOpacity
-            style={[styles.choice, styles.browseBtn]}
-            onPress={() => setPicking(picking === 'digest' ? null : 'digest')}>
-            <Text style={styles.choiceLabel}>
-              {picking === 'digest' ? '▾ Close browser' : '▸ Browse for a folder'}
-            </Text>
-          </TouchableOpacity>
-          <FolderPicker
-            visible={picking === 'digest'}
-            initialPath={relativeOf(folderOf(settings.digestNote))}
-            onCancel={() => setPicking(null)}
-            onPick={chosen => {
-              // The browser chooses a folder; the note keeps the name it has,
-              // since naming a file is not something a folder browser does.
-              change({digestNote: `${STORAGE_ROOT}/${chosen}/${nameOf(settings.digestNote)}`});
-              setPicking(null);
-            }}
-          />
-          <Text style={styles.choiceHint}>
-            A book cannot be written into, so excerpts go here — one page each,
-            with a link back to the page of the book they came from.
-          </Text>
-
-          <Text style={styles.settingsTitle}>Where clippings and screenshots are saved</Text>
-          <TextInput
-            style={styles.field}
-            value={settings.clipFolder}
-            onChangeText={value => change({clipFolder: value})}
-            placeholder={DEFAULT_SETTINGS.clipFolder}
-            autoCorrect={false}
-          />
-          <TouchableOpacity
-            style={[styles.choice, styles.browseBtn]}
-            onPress={() => setPicking(picking === 'clips' ? null : 'clips')}>
-            <Text style={styles.choiceLabel}>
-              {picking === 'clips' ? '▾ Close browser' : '▸ Browse for a folder'}
-            </Text>
-          </TouchableOpacity>
-          <FolderPicker
-            visible={picking === 'clips'}
-            initialPath={relativeOf(settings.clipFolder)}
-            onCancel={() => setPicking(null)}
-            onPick={chosen => {
-              change({clipFolder: chosen});
-              setPicking(null);
-            }}
-          />
-          <Text style={styles.choiceHint}>
-            A folder on the device. Relative names sit inside internal storage.
-          </Text>
-        </ScrollView>
-      )}
 
       <View style={styles.body} ref={readerRef} collapsable={false}>
         {page && page.blocks.length > 0 ? (
@@ -839,32 +735,6 @@ export default function App(): React.JSX.Element {
       )}
     </View>
   );
-}
-
-/**
- * Where shared storage is mounted.
- *
- * The folder browser speaks in paths relative to it, because that is how a
- * person reads a location on this device; the settings that name files keep
- * the absolute form, because that is what the SDK takes.
- */
-const STORAGE_ROOT = '/storage/emulated/0';
-
-/** A stored path as the browser wants it: relative, no leading slash. */
-function relativeOf(path: string): string {
-  const trimmed = path.startsWith(STORAGE_ROOT) ? path.slice(STORAGE_ROOT.length) : path;
-  return trimmed.replace(/^\/+/, '').replace(/\/+$/, '');
-}
-
-/** Everything before the last slash. */
-function folderOf(path: string): string {
-  const cut = path.lastIndexOf('/');
-  return cut > 0 ? path.slice(0, cut) : path;
-}
-
-/** Everything after the last slash. */
-function nameOf(path: string): string {
-  return path.slice(path.lastIndexOf('/') + 1) || 'Look Up.note';
 }
 
 /** A block as text, including a result's snippet. */

@@ -5,8 +5,8 @@
   "desc": "Look something up on the web without leaving what you are reading. Lasso handwriting in a note, or select text in a book or PDF, and the selection becomes a web search. Results are fetched and shown as plain text you can read on the page you were already on. Choose the passages worth keeping and they go back into your note: a \"Source URL\" link to each page you chose, and a second link, named however you like, opening what you kept as text or as a picture of what you read. A book cannot be written into, so selections made while reading one are collected into a lookup note instead - one page each, carrying the excerpt and a link back to the page of the book it came from. Your search words are sent only to the search engine you choose - DuckDuckGo, Wikipedia or Wiby - and to the pages you then open. There is no account and no server of ours. Network access fetches those pages; file access stores the clippings and settings in Document/LookUp and the excerpts in the note you name.",
   "name": "Web Lookup",
   "author": "Sparkinman",
-  "versionCode": "23",
-  "versionName": "2.2.0",
+  "versionCode": "24",
+  "versionName": "2.3.0",
   "jsMainPath": "index",
   "uses-permissions": [
     "plugin.permission.INTERNET",

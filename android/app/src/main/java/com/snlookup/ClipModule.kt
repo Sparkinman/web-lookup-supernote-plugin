@@ -354,7 +354,9 @@ class ClipModule(reactContext: ReactApplicationContext) :
     private const val HEADING_SIZE = 42f
     private const val URL_SIZE = 34f
     private const val BODY_SIZE = 38f
-    private const val MAX_CHARS = 12000
+    // Raising this to 12000 produced a bitmap 113,000 pixels tall, which is
+    // most of a gigabyte in memory and beyond what the image viewer will open.
+    private const val MAX_CHARS = 3000
     private val GREY = Color.rgb(90, 90, 90)
   }
 }
