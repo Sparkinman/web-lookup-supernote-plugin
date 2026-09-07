@@ -15,6 +15,7 @@ import {name as appName} from './app.json';
 import {PluginManager} from 'sn-plugin-lib';
 import {versionName, versionCode} from './PluginConfig.json';
 import {log, startSession} from './src/log';
+import {reportTap} from './src/pageprobe';
 
 // MUST come before PluginManager.init() — init depends on the registered component.
 // Root wraps the panel in an error boundary so a crash shows on the device
@@ -92,6 +93,47 @@ PluginManager.registerButton(3, ['DOC'], {
   icon: ICON,
   showType: 1,
 });
+
+/**
+ * Touches on the note, whether or not this plugin's view is up.
+ *
+ * Round A: this reports and does nothing. It writes no element, deletes none,
+ * and never calls saveCurrentNote -- which is the call that destroyed a page,
+ * by pushing the plugin's stale cached copy back over the real file after an
+ * element write.
+ *
+ * What it establishes is whether a tap's coordinates and an element's rectangle
+ * are in the same space. Only DOWN and UP matter. A pen touch is ignored, since
+ * a pen is drawing; so is anything that moved between down and up, which is a
+ * drag rather than a tap.
+ */
+const TAP_SLOP = 24;
+let downAt = null;
+
+try {
+  PluginManager.registerMotionListener(1, {
+    onMsg(message) {
+      const finger = message?.toolType === 1 && message?.pointerCount === 1;
+      if (message?.action === 0) {
+        downAt = finger ? {x: message.x, y: message.y} : null;
+        return;
+      }
+      if (message?.action !== 1 || !downAt || !finger) {
+        downAt = null;
+        return;
+      }
+      const from = downAt;
+      downAt = null;
+      if (Math.abs(message.x - from.x) > TAP_SLOP || Math.abs(message.y - from.y) > TAP_SLOP) {
+        return;
+      }
+      reportTap(message.x, message.y).catch(err => log(`tap: ${err?.message ?? err}`));
+    },
+  });
+  log('motion listener registered (reporting only)');
+} catch (err) {
+  log(`motion listener failed: ${err?.message ?? err}`);
+}
 
 /**
  * The settings entry on the device's plugin management screen.

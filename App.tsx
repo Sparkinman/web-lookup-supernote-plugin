@@ -58,6 +58,7 @@ import {
   type Settings,
 } from './src/settings';
 import {addBookDigest, calibrate, isExpired, sessionIsGood} from './src/cloud';
+import {dumpPage} from './src/pageprobe';
 import {SettingsScreen} from './src/Settings';
 import {get, openExternally, postForm, WEB_AVAILABLE} from './src/web';
 import {
@@ -374,6 +375,10 @@ export default function App(): React.JSX.Element {
             `anchor: ${captured.fileName} page ${captured.source.page} ` +
               `note=${captured.isNote} rect=${JSON.stringify(captured.rect)}`,
           );
+          // Round A: read the page and print what is on it. Writes nothing.
+          if (captured.isNote) {
+            void dumpPage();
+          }
           // The last book is remembered because a book lookup needs to name it.
           if (!captured.isNote && settingsRef.current.lastBook !== captured.source.path) {
             changeRef.current({lastBook: captured.source.path});
