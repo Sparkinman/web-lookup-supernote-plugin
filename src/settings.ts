@@ -39,6 +39,33 @@ export type BookQuery = 'text' | 'withBook';
 export const DEFAULT_DIGEST_NOTE = '/storage/emulated/0/Note/Look Up.note';
 
 /**
+ * One-tap words to add to a search.
+ *
+ * A passage searched verbatim returns the passage back, which is no use when
+ * the thing wanted is an explanation of it. These are appended and the search
+ * run again, so refining costs one tap rather than editing two hundred
+ * characters on a stylus keyboard.
+ *
+ * Editable, because what is useful depends entirely on what is being read: a
+ * scripture passage wants commentary, a datasheet wants a specification.
+ */
+export const DEFAULT_REFINEMENTS = [
+  'explained',
+  'meaning',
+  'commentary',
+  'summary',
+  'history',
+  'in context',
+  'examples',
+  'definition',
+  'criticism',
+  'how it works',
+];
+
+/** More than this and the row is taller than the thing it refines. */
+export const MAX_REFINEMENTS = 10;
+
+/**
  * Where drawn clippings and screenshots are written.
  *
  * Relative to shared storage, so it reads as a place on the device rather than
@@ -60,6 +87,8 @@ export interface Settings {
   digestNote: string;
   /** Where clippings and screenshots are saved. */
   clipFolder: string;
+  /** The one-tap additions offered under the search box. */
+  refinements: string[];
   /**
    * The last book a lookup was started from.
    *
@@ -96,6 +125,7 @@ export const DEFAULT_SETTINGS: Settings = {
   notesLabel: 'Notes',
   digestNote: DEFAULT_DIGEST_NOTE,
   clipFolder: DEFAULT_CLIP_FOLDER,
+  refinements: DEFAULT_REFINEMENTS,
   lastBook: '',
   cloudEmail: '',
   cloudToken: '',
@@ -180,6 +210,13 @@ export async function loadSettings(): Promise<Settings> {
         typeof parsed.clipFolder === 'string' && parsed.clipFolder.trim()
           ? parsed.clipFolder.trim()
           : DEFAULT_SETTINGS.clipFolder,
+      refinements: Array.isArray(parsed.refinements)
+        ? parsed.refinements
+            .filter((word): word is string => typeof word === 'string')
+            .map(word => word.replace(/\s+/g, ' ').trim())
+            .filter(Boolean)
+            .slice(0, MAX_REFINEMENTS)
+        : DEFAULT_REFINEMENTS,
       lastBook: typeof parsed.lastBook === 'string' ? parsed.lastBook : '',
       cloudEmail: typeof parsed.cloudEmail === 'string' ? parsed.cloudEmail : '',
       cloudToken: typeof parsed.cloudToken === 'string' ? parsed.cloudToken : '',

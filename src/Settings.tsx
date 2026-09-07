@@ -27,8 +27,10 @@ import {fileInfo} from './settings';
 import {FolderPicker} from './FolderPicker';
 import {
   BOOK_QUERY_CHOICES,
+  DEFAULT_REFINEMENTS,
   DEFAULT_SETTINGS,
   MAX_LABEL_LENGTH,
+  MAX_REFINEMENTS,
   type Settings,
 } from './settings';
 
@@ -330,6 +332,39 @@ export function SettingsScreen({
           </View>
         </Fold>
 
+        <Fold
+          title="Words to add to a search"
+          open={open === 'refine'}
+          onToggle={() => fold('refine')}>
+          <Text style={styles.help}>
+            These sit under the search box. Tapping one adds it to what you searched for and
+            looks again — a passage searched word for word tends to return the passage back,
+            and this is how you ask for something about it instead.
+          </Text>
+          <View style={styles.field}>
+            <Text style={styles.fieldLabel}>One per line, up to {MAX_REFINEMENTS}</Text>
+            <TextInput
+              style={[styles.input, styles.lines]}
+              value={settings.refinements.join('\n')}
+              onChangeText={value =>
+                onChange({
+                  refinements: value
+                    .split('\n')
+                    .map(word => word.trim())
+                    .slice(0, MAX_REFINEMENTS),
+                })
+              }
+              multiline
+              autoCorrect={false}
+            />
+            <TouchableOpacity
+              style={styles.choice}
+              onPress={() => onChange({refinements: DEFAULT_REFINEMENTS})}>
+              <Text style={styles.choiceLabel}>Put the original list back</Text>
+            </TouchableOpacity>
+          </View>
+        </Fold>
+
         <Fold title="Reading a book" open={open === 'book'} onToggle={() => fold('book')}>
           {BOOK_QUERY_CHOICES.map(choice => (
             <TouchableOpacity
@@ -576,6 +611,7 @@ const styles = StyleSheet.create({
   onText: {color: '#fff'},
 
   field: {marginBottom: 12},
+  lines: {minHeight: 220, textAlignVertical: 'top'},
   fieldLabel: {fontSize: 17, fontWeight: '600', color: '#000', marginBottom: 6},
   fieldRow: {flexDirection: 'row', alignItems: 'stretch'},
   input: {

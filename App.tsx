@@ -99,6 +99,26 @@ export default function App(): React.JSX.Element {
   const [history, setHistory] = useState<string[]>([]);
   /** Which page of results is showing, counting from one. */
   const [resultPage, setResultPage] = useState(1);
+  /**
+   * Whether to draw only the prose of the page being read.
+   *
+   * Off to begin with, and reset by every new search: the links are the point
+   * of a result list. Once inside an article they are mostly the site's own
+   * furniture, and hiding them is the difference between reading a page and
+   * hunting through it.
+   */
+  const [hideLinks, setHideLinks] = useState(false);
+  /**
+   * Reading the page as one piece of text, so it can be selected.
+   *
+   * React Native reports a selection in a text field and nowhere else, which is
+   * why passages are otherwise chosen by tapping. In this mode the page becomes
+   * a single field, the device's own handles work, and what they enclose is
+   * what gets captured -- at the cost of the arrows, since there are no
+   * separate blocks left to hang them on.
+   */
+  const [selecting, setSelecting] = useState(false);
+  const [range, setRange] = useState({start: 0, end: 0});
   const [loading, setLoading] = useState(false);
   const [picked, setPicked] = useState<number[]>([]);
   const [status, setStatus] = useState<string | null>(null);
@@ -277,6 +297,8 @@ export default function App(): React.JSX.Element {
       log(`search: "${trimmed}" lens=${withLens.id}`);
       setHistory([]);
       setResultPage(1);
+      setHideLinks(false);
+      setSelecting(false);
       await open(resolve(trimmed, withLens), withLens.followFirst);
     },
     [open],
@@ -490,6 +512,32 @@ export default function App(): React.JSX.Element {
       .filter(Boolean)
       .join('\n\n');
   }, [page]);
+
+  /**
+   * The passages to draw, each with the index it has in the page.
+   *
+   * The index travels with the block because everything else -- what is picked,
+   * where a block was laid out -- is keyed by position in the page rather than
+   * position on screen, and hiding the links changes only the second.
+   */
+  const shown = useCallback((): {block: Block; index: number}[] => {
+    if (!page) {
+      return [];
+    }
+    const all = page.blocks.map((block, index) => ({block, index}));
+    if (!hideLinks) {
+      return all;
+    }
+    return all.filter(entry => !entry.block.href);
+  }, [hideLinks, page]);
+
+  /** The whole page as one piece of text, in the order it is drawn. */
+  const pageAsText = useCallback((): string => {
+    return shown()
+      .map(entry => blockText(entry.block))
+      .filter(Boolean)
+      .join('\n\n');
+  }, [shown]);
 
   const chosenText = useCallback((): string => {
     if (!page) {
@@ -814,9 +862,16 @@ export default function App(): React.JSX.Element {
    * test.
    */
   const captureText = useCallback(() => {
-    const shown = visibleText();
+    // Three sources, narrowest first: a real selection, then whatever was
+    // tapped, then what happens to be on screen. Each is a more deliberate
+    // statement of intent than the one after it.
+    const selected =
+      selecting && range.end > range.start
+        ? pageAsText().slice(range.start, range.end).trim()
+        : '';
+    const shown = selected || chosenText() || visibleText();
     if (!shown) {
-      setStatus('Nothing on screen to capture yet.');
+      setStatus('Nothing selected or on screen to capture yet.');
       return;
     }
     // Replaces what was there. Adding to it meant a capture taken on one page
@@ -830,7 +885,7 @@ export default function App(): React.JSX.Element {
       setEditingNote(true);
       setStatus('Captured what is on screen — trim it, then keep it.');
     });
-  }, [guard, visibleText]);
+  }, [chosenText, guard, pageAsText, range, selecting, visibleText]);
 
   /** Photograph the reader as it stands, and hang the picture off the writing. */
   const screenshot = useCallback(async () => {
@@ -1013,12 +1068,59 @@ export default function App(): React.JSX.Element {
           </TouchableOpacity>
         ))}
         <View style={styles.spacer} />
+        {page ? (
+          <TouchableOpacity
+            style={[styles.lens, selecting && styles.lensOn]}
+            onPress={() => {
+              setSelecting(v => !v);
+              setRange({start: 0, end: 0});
+            }}>
+            <Text style={[styles.lensText, selecting && styles.lensTextOn]}>
+              {selecting ? 'Selecting' : 'Select text'}
+            </Text>
+            <Text style={[styles.lensShort, selecting && styles.lensTextOn]}>
+              {selecting ? 'Drag, then Capture' : 'Drag over what you want'}
+            </Text>
+          </TouchableOpacity>
+        ) : null}
+        {page?.blocks.some(block => block.href) ? (
+          <TouchableOpacity
+            style={[styles.lens, hideLinks && styles.lensOn]}
+            onPress={() => setHideLinks(v => !v)}>
+            <Text style={[styles.lensText, hideLinks && styles.lensTextOn]}>
+              {hideLinks ? 'Links hidden' : 'Hide links'}
+            </Text>
+            <Text style={[styles.lensShort, hideLinks && styles.lensTextOn]}>
+              {hideLinks ? 'Prose only' : 'Show the text alone'}
+            </Text>
+          </TouchableOpacity>
+        ) : null}
         {url ? (
           <TouchableOpacity style={styles.lens} onPress={handOff}>
             <Text style={styles.lensText}>Open in viewer</Text>
           </TouchableOpacity>
         ) : null}
       </View>
+
+      {settings.refinements.length > 0 && query.trim() ? (
+        <ScrollView horizontal style={styles.refine} showsHorizontalScrollIndicator={false}>
+          {settings.refinements.map(word => (
+            <TouchableOpacity
+              key={word}
+              style={styles.refineBtn}
+              onPress={() => {
+                // Added rather than replacing, and only once: pressing the same
+                // one twice should not search for it twice.
+                const already = query.trim().toLowerCase().endsWith(word.toLowerCase());
+                const asked = already ? query.trim() : `${query.trim()} ${word}`;
+                setQuery(asked);
+                void search(asked, lensRef.current);
+              }}>
+              <Text style={styles.refineText}>+ {word}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      ) : null}
 
       <Text style={styles.hint} numberOfLines={2}>
         {status ?? (url ? `${page?.title ?? ''} — ${hostOf(url)}` : lens.hint)}
@@ -1071,7 +1173,19 @@ export default function App(): React.JSX.Element {
         style={[styles.body, editingNote && styles.hidden]}
         ref={readerRef}
         collapsable={false}>
-        {page && page.blocks.length > 0 ? (
+        {page && selecting ? (
+          // The page as one field. Read-only in effect -- edits here would have
+          // nothing to be saved into -- but a real text field, so the device's
+          // own selection handles work and what they enclose can be read back.
+          <TextInput
+            style={styles.selectable}
+            value={pageAsText()}
+            onSelectionChange={event => setRange(event.nativeEvent.selection)}
+            multiline
+            showSoftInputOnFocus={false}
+            autoCorrect={false}
+          />
+        ) : page && shown().length > 0 ? (
           <ScrollView
             ref={scrollRef}
             style={styles.scroll}
@@ -1083,7 +1197,7 @@ export default function App(): React.JSX.Element {
             onLayout={event => {
               viewport.current.height = event.nativeEvent.layout.height;
             }}>
-            {page.blocks.map((block, index) => (
+            {shown().map(({block, index}) => (
               <Passage
                 key={`${index}-${block.text.slice(0, 24)}`}
                 block={block}
@@ -1312,6 +1426,24 @@ const styles = StyleSheet.create({
   lensTextOn: {color: '#fff'},
   spacer: {flex: 1},
   lensShort: {fontSize: 12, color: '#000', marginTop: 2},
+  selectable: {
+    flex: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    fontSize: 17,
+    lineHeight: 25,
+    color: '#000',
+    textAlignVertical: 'top',
+  },
+  refine: {flexGrow: 0, paddingHorizontal: 8, paddingVertical: 6},
+  refineBtn: {
+    borderWidth: 2,
+    borderColor: '#000',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginRight: 8,
+  },
+  refineText: {fontSize: 16, color: '#000', fontWeight: '600'},
   hint: {paddingHorizontal: 12, paddingVertical: 6, fontSize: 13, color: '#000'},
   reference: {paddingHorizontal: 12, paddingBottom: 4, fontSize: 12, color: '#000'},
   body: {flex: 1},
