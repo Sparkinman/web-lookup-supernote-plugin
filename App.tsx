@@ -831,16 +831,22 @@ export default function App(): React.JSX.Element {
     // Capped, because a page can be enormous: an unpicked clip of one article
     // ran to 1,315 passages and drew an image 113,000 pixels tall.
     const kept = chosen ?? page.blocks.map((_, i) => i).slice(0, MAX_UNPICKED);
-    // Each passage carries its own address, so a clipping of several results
-    // says which one said what.
-    const sections: ClipSection[] = kept
-      .map(i => page.blocks[i])
-      .filter((block): block is Block => Boolean(block))
-      .map(block => ({
-        heading: block.text,
-        url: block.href ?? '',
-        body: block.detail ?? '',
-      }));
+    // What the popup shows. A draft wins: it is the text that was captured,
+    // selected and cut down by hand, and drawing the passages afresh instead
+    // meant every edit was thrown away between keeping something and reading
+    // it back. Without one, each passage carries its own address, so a clipping
+    // of several results still says which one said what.
+    const draft = note.trim();
+    const sections: ClipSection[] = draft
+      ? [{heading: '', url: '', body: draft}]
+      : kept
+          .map(i => page.blocks[i])
+          .filter((block): block is Block => Boolean(block))
+          .map(block => ({
+            heading: block.text,
+            url: block.href ?? '',
+            body: block.detail ?? '',
+          }));
     if (sections.length === 0) {
       return;
     }
@@ -880,7 +886,7 @@ export default function App(): React.JSX.Element {
     } finally {
       setBusy(false);
     }
-  }, [anchor, chosenUrls, finish, page, picked, query, settings, url]);
+  }, [anchor, chosenUrls, finish, note, page, picked, query, settings, url]);
 
   /**
    * Read the passages on screen into the editor.
@@ -1365,7 +1371,7 @@ export default function App(): React.JSX.Element {
               style={[styles.insert, busy && styles.btnOff]}
               onPress={clip}
               disabled={busy}>
-              <Text style={styles.insertText}>Insert links</Text>
+              <Text style={styles.insertText}>Insert link and notes</Text>
             </TouchableOpacity>
           )}
           </View>
