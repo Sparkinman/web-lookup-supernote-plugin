@@ -264,16 +264,16 @@ export default function App(): React.JSX.Element {
           log(`anchor: unavailable (${err instanceof Error ? err.message : String(err)})`);
         }
 
-        const captured =
+        const read =
           buttonId === DOC_SELECTION_BUTTON
             ? await readDocSelectionAsQuery()
-            : await readLassoAsQuery();
-        // What the box shows is what was selected; what gets searched may carry
-        // the book's title as well, which would be noise to see in the box.
-        setQuery(captured);
-        setSelection(captured);
+            : await readLassoAsQuery().then(text => ({query: text, full: text}));
+        // What the box shows is what will be searched; what is quoted is the
+        // whole selection, which may be longer than a sensible query.
+        setQuery(read.query);
+        setSelection(read.full);
         const asked = withBookContext(
-          captured,
+          read.query,
           capturedAnchor,
           settingsRef.current.bookQuery === 'withBook',
         );
@@ -463,7 +463,7 @@ export default function App(): React.JSX.Element {
           // read here rather than assumed.
           const [identity, positions] = await Promise.all([
             fileInfo(anchor.source.path),
-            positionInPage(anchor.source.page, query),
+            positionInPage(anchor.source.page, selection || query),
           ]);
           const id = await addBookDigest(
             settings.cloudToken,

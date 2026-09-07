@@ -139,16 +139,23 @@ export async function readLassoAsQuery(): Promise<string> {
  * dismissed, which matters because opening the plugin view can clear the
  * on-screen selection before this runs.
  */
-export async function readDocSelectionAsQuery(): Promise<string> {
+export async function readDocSelectionAsQuery(): Promise<{query: string; full: string}> {
   const selected = unwrap<string>(
     await step('getLastSelectedText', () => PluginDocAPI.getLastSelectedText()),
     'getLastSelectedText',
   );
-  const query = clamp(normalize(selected));
+  // Two forms of the same selection, because they are wanted for opposite
+  // reasons. A search is better short -- a whole paragraph makes a worse query
+  // than its first line, and a very long one risks being refused -- while a
+  // quotation must be whole, and a digest headed with two hundred characters
+  // stops mid-sentence, which is what "for us to die" was.
+  const full = normalize(selected);
+  const query = clamp(full);
   if (!query) {
     throw new Error('No text selected.');
   }
-  return query;
+  log(`selection: ${full.length} characters, searching with ${query.length}`);
+  return {query, full};
 }
 
 /**
@@ -218,7 +225,20 @@ export async function positionInPage(
       log('position: the selection was not found in the page text');
       return null;
     }
-    return {start: found.index, end: found.index + found[0].length};
+    const start = found.index;
+    const end = start + found[0].length;
+    // Logged with the page text either side of it. A highlight that lands late
+    // or early is an offset counted against a slightly different string than
+    // the device counts against, and the only way to see which is to print what
+    // is actually at the offsets being sent.
+    log(
+      `position: ${start}..${end} of ${text.length} — before[${JSON.stringify(
+        text.slice(Math.max(0, start - 30), start),
+      )}] at[${JSON.stringify(text.slice(start, start + 40))}] end[${JSON.stringify(
+        text.slice(Math.max(0, end - 40), end),
+      )}]`,
+    );
+    return {start, end};
   } catch (err) {
     log(`position: unavailable (${err instanceof Error ? err.message : String(err)})`);
     return null;
