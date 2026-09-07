@@ -20,7 +20,6 @@
 
 import {NativeModules} from 'react-native';
 
-import {findFile} from './cloudfiles';
 import {log} from './log';
 
 interface WebNative {
@@ -257,10 +256,18 @@ export interface NewDigest {
   /** Where the passage sits in that page's text, in characters. */
   startPosition?: number;
   endPosition?: number;
-  /** How the device identifies the source: its byte count and content hash. */
+  /** The source document's byte count, which its digests record. */
   sourceSize?: number;
-  sourceMd5?: string;
   libraryUid?: string;
+}
+
+/** A random lowercase hex string of the given length. */
+function randomHex(length: number): string {
+  let out = '';
+  while (out.length < length) {
+    out += Math.floor(Math.random() * 0x100000000).toString(16).padStart(8, '0');
+  }
+  return out.slice(0, length);
 }
 
 /**
@@ -344,9 +351,12 @@ export async function createDigest(token: string, digest: NewDigest): Promise<st
     if (digest.sourceSize) {
       metadata.source_size = digest.sourceSize;
     }
-    if (digest.sourceMd5) {
-      metadata.unique_identifier = digest.sourceMd5;
-    }
+    // Fresh every time. Two digests taken from the same book carry different
+    // values here -- 4c3263b9… and 6172d02a… for one Bible -- so this names the
+    // digest, not the file, and is nothing to do with the file's hash. The
+    // file's real MD5 does live in the cloud file registry, and is a third
+    // number again.
+    metadata.unique_identifier = randomHex(32);
     payload.metadata = JSON.stringify(metadata);
   }
 
@@ -419,12 +429,13 @@ export async function testRoundTrip(
     }
 
     const keptPath = String(mine.sourcePath ?? '');
+    const sentPath = cloudPath(bookPath);
     const keptType = mine.sourceType;
     const metadata = String(mine.metadata ?? '');
     const survived =
-      keptPath === bookPath
+      keptPath === sentPath
         ? 'the source path survived'
-        : `the source path did NOT survive (got "${keptPath}")`;
+        : `the source path did NOT survive (sent "${sentPath}", got "${keptPath}")`;
     log(`cloud: ${survived}; sourceType=${String(keptType)}; metadata=${metadata}`);
     return `${survived}. Check the log for the whole row.`;
   } finally {
@@ -450,7 +461,8 @@ export async function testRoundTrip(
  */
 export async function addBookDigest(
   token: string,
-  passage: string,
+  selection: string,
+  found: string,
   bookPath: string,
   page: number,
   reference: string,
@@ -458,31 +470,19 @@ export async function addBookDigest(
   identity: {md5: string; size: number} | null,
   positions: {start: number; end: number} | null,
 ): Promise<string> {
-  // Supernote's own value for the file, looked up rather than computed: the
-  // file's real MD5 is not what its digests carry. Falls back to the local hash
-  // when the registry cannot be reached, which is no worse than sending none.
-  let sourceMd5 = identity?.md5;
-  try {
-    const registered = await findFile(token, cloudPath(bookPath));
-    if (registered?.md5) {
-      sourceMd5 = registered.md5;
-    }
-  } catch (err) {
-    log(`cloud: could not look the book up (${err instanceof Error ? err.message : String(err)})`);
-  }
-
-  // The passage is the digest; where it came from is a note about it. Putting
-  // both in the content made one paragraph of two different things, and left
-  // the typed section of the entry empty when that is exactly what it is for.
+  // The book's own words are the digest -- they are what the entry is headed
+  // with, and what it would be headed with had the device taken it. What the
+  // web said about them is a note on that, which is what the typed section is
+  // for. The other way round put a paragraph of search results where the
+  // quotation belongs.
   return createDigest(token, {
-    content: passage,
-    comment: [reference, ...urls].filter(Boolean).join(' — '),
+    content: selection,
+    comment: [found, reference, ...urls].filter(Boolean).join(' — '),
     sourcePath: bookPath,
     sourceType: SOURCE_DOCUMENT,
     page,
     startPosition: positions?.start,
     endPosition: positions?.end,
     sourceSize: identity?.size,
-    sourceMd5,
   });
 }

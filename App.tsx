@@ -84,6 +84,14 @@ const DOC_SELECTION_BUTTON = 300;
 
 export default function App(): React.JSX.Element {
   const [query, setQuery] = useState('');
+  /**
+   * What was actually selected in the book, before the box was touched.
+   *
+   * The digest is headed with this rather than with the search box: the box may
+   * have been edited, may carry the book's title as context, and is a search
+   * rather than a quotation.
+   */
+  const [selection, setSelection] = useState('');
   const [lens, setLens] = useState<Lens>(DEFAULT_LENS);
   const [page, setPage] = useState<Page | null>(null);
   const [url, setUrl] = useState<string | null>(null);
@@ -275,6 +283,7 @@ export default function App(): React.JSX.Element {
         // What the box shows is what was selected; what gets searched may carry
         // the book's title as well, which would be noise to see in the box.
         setQuery(captured);
+        setSelection(captured);
         const asked = withBookContext(
           captured,
           capturedAnchor,
@@ -459,6 +468,7 @@ export default function App(): React.JSX.Element {
           ]);
           const id = await addBookDigest(
             settings.cloudToken,
+            selection || query,
             text,
             anchor.source.path,
             anchor.source.page,
@@ -487,7 +497,7 @@ export default function App(): React.JSX.Element {
     } finally {
       setBusy(false);
     }
-  }, [anchor, chosenUrls, finish, page, picked, query, settings]);
+  }, [anchor, chosenUrls, finish, page, picked, query, selection, settings]);
 
   /**
    * Draw the chosen passages as an image and hang it off the handwriting.
