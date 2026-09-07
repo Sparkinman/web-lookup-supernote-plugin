@@ -14,11 +14,8 @@
 import React, {useState} from 'react';
 import {ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
 
-import {PluginCommAPI, PluginDocAPI} from 'sn-plugin-lib';
-
 import {
   beginSignIn,
-  calibrate,
   CLOUD_AVAILABLE,
   finishSignIn,
   sessionIsGood,
@@ -241,32 +238,6 @@ export function SettingsScreen({
       } else {
         setCloudStatus('Could not reach Supernote, so this proves nothing either way.');
       }
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const runCalibrate = async () => {
-    setBusy(true);
-    setCloudStatus('Comparing against a digest the device made…');
-    try {
-      const path = (await PluginCommAPI.getCurrentFilePath()) as {result?: string} | null;
-      const num = (await PluginCommAPI.getCurrentPageNum()) as {result?: number} | null;
-      const book = String(path?.result ?? '');
-      const page = Number(num?.result ?? -1);
-      if (!book || page < 0) {
-        setCloudStatus('Open the book first, then come back here.');
-        return;
-      }
-      const text = (await PluginDocAPI.getCurrentDocText(page)) as {result?: string} | null;
-      const pageText = String(text?.result ?? '');
-      if (!pageText) {
-        setCloudStatus('That page has no text this can read.');
-        return;
-      }
-      setCloudStatus(await calibrate(settings.cloudToken, book, page, pageText));
-    } catch (err) {
-      setCloudStatus(err instanceof Error ? err.message : 'That did not work.');
     } finally {
       setBusy(false);
     }
@@ -523,17 +494,6 @@ export function SettingsScreen({
                   <Text style={styles.choiceHint}>
                     A sign-in lasts about thirty days and cannot renew itself. This is also
                     checked quietly whenever the plugin opens.
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.choice, busy && styles.dim]}
-                  disabled={busy}
-                  onPress={() => void runCalibrate()}>
-                  <Text style={styles.choiceLabel}>Calibrate the highlight</Text>
-                  <Text style={styles.choiceHint}>
-                    Open the book at a page that already has one of your own digests on it, then
-                    press this. It compares where the device says that passage starts against
-                    where this plugin finds it, which is what the highlight is drifting by.
                   </Text>
                 </TouchableOpacity>
                 <TouchableOpacity

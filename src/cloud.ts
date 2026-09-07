@@ -565,18 +565,17 @@ export async function sessionIsGood(token: string): Promise<boolean | null> {
 export async function calibrate(
   token: string,
   bookPath: string,
-  currentPage: number,
-  pageText: string,
+  readPage: (page: number) => Promise<string>,
 ): Promise<string> {
   const wanted = cloudPath(bookPath);
   const rows = await listDigests(token);
 
-  const mine: {page: number; content: string; start: number; end: number}[] = [];
+  const theirs: {page: number; content: string; start: number; end: number}[] = [];
   for (const row of rows) {
     if (String(row.sourcePath ?? '') !== wanted) {
       continue;
     }
-    // Only the device's own: ours were written with our own arithmetic and
+    // Only the device's own. Ours were written with our own arithmetic and
     // would confirm nothing but itself.
     if (row.uniqueIdentifier) {
       continue;
@@ -592,7 +591,7 @@ export async function calibrate(
       if (!spot || typeof spot.startPosition !== 'number' || typeof spot.page !== 'number') {
         continue;
       }
-      mine.push({
+      theirs.push({
         page: spot.page,
         content: String(row.content ?? ''),
         start: spot.startPosition,
@@ -603,23 +602,20 @@ export async function calibrate(
     }
   }
 
-  if (mine.length === 0) {
+  if (theirs.length === 0) {
+    log('calibrate: no digest the device made was found for this book');
     return 'No digest the device made was found for this book.';
   }
 
-  log(`calibrate: ${mine.length} device-made digest(s) in this book`);
-  for (const entry of mine) {
-    log(`calibrate: page ${entry.page} says ${entry.start}..${entry.end} for "${entry.content.slice(0, 60)}"`);
-  }
-
-  const here = mine.filter(entry => entry.page === currentPage);
-  if (here.length === 0) {
-    const pages = mine.map(entry => entry.page).join(', ');
-    return `None on this page. Open the book at page ${pages} and press this again.`;
-  }
-
   const lines: string[] = [];
-  for (const entry of here) {
+  for (const entry of theirs.slice(0, 4)) {
+    // Any page of the open document can be read, not only the one on screen,
+    // so nothing has to be navigated to for this.
+    const pageText = await readPage(entry.page);
+    if (!pageText) {
+      log(`calibrate: page ${entry.page} gave no text`);
+      continue;
+    }
     const escaped = entry.content
       .trim()
       .split(/\s+/)
@@ -627,18 +623,33 @@ export async function calibrate(
       .join('\\s+');
     const found = new RegExp(escaped).exec(pageText);
     if (!found) {
-      log(`calibrate: "${entry.content.slice(0, 40)}" is not in this page's text at all`);
-      lines.push('one digest\'s text is not in the page text');
+      log(
+        `calibrate: page ${entry.page}, the device's own text is not in this page's text — ` +
+          `device says ${entry.start}..${entry.end}, page is ${pageText.length} chars, ` +
+          `content ${entry.content.length}`,
+      );
       continue;
     }
     const ours = found.index;
     const oursEnd = ours + found[0].length;
+    const before = pageText.slice(0, ours);
+    // Counted so the shape of the difference is visible rather than inferred:
+    // if it matches the newlines before the passage, or the digits, that is the
+    // answer.
+    const newlines = (before.match(/\n/g) ?? []).length;
+    const digits = (before.match(/\d/g) ?? []).length;
+    const spaces = (before.match(/[ \t]/g) ?? []).length;
     log(
-      `calibrate: device ${entry.start}..${entry.end}, ours ${ours}..${oursEnd}, ` +
-        `difference ${entry.start - ours}..${entry.end - oursEnd}, ` +
-        `page text ${pageText.length} chars, content ${entry.content.length}`,
+      `calibrate: page ${entry.page} — device ${entry.start}..${entry.end}, ` +
+        `ours ${ours}..${oursEnd}, difference ${entry.start - ours}..${entry.end - oursEnd}; ` +
+        `before it: ${newlines} newlines, ${digits} digits, ${spaces} spaces, ` +
+        `${before.length} chars; page ${pageText.length}, content ${entry.content.length}, ` +
+        `device span ${entry.end - entry.start}`,
     );
-    lines.push(`device ${entry.start}..${entry.end}, ours ${ours}..${oursEnd}`);
+    lines.push(`page ${entry.page}: device ${entry.start}, ours ${ours}`);
   }
-  return lines.join('; ');
+
+  return lines.length > 0
+    ? `${lines.join('; ')} — see the log.`
+    : 'Found digests, but none of their text could be located in the pages.';
 }

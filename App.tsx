@@ -28,6 +28,7 @@ import {PluginManager} from 'sn-plugin-lib';
 
 import {
   captureAnchor,
+  pageText,
   positionInPage,
   readDocSelectionAsQuery,
   readLassoAsQuery,
@@ -56,7 +57,7 @@ import {
   saveSettings,
   type Settings,
 } from './src/settings';
-import {addBookDigest, isExpired, sessionIsGood} from './src/cloud';
+import {addBookDigest, calibrate, isExpired, sessionIsGood} from './src/cloud';
 import {SettingsScreen} from './src/Settings';
 import {get, openExternally, WEB_AVAILABLE} from './src/web';
 import {
@@ -120,6 +121,8 @@ export default function App(): React.JSX.Element {
   const [editingNote, setEditingNote] = useState(false);
   /** Whether the draft has been touched, so choosing again does not overwrite it. */
   const noteTouched = useRef(false);
+  /** The highlight drift is measured once a run; it does not change. */
+  const calibrated = useRef(false);
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [showSettings, setShowSettings] = useState(false);
   /** The part of the panel a screenshot photographs: the reader, not the chrome. */
@@ -278,6 +281,16 @@ export default function App(): React.JSX.Element {
           // The last book is remembered because a book lookup needs to name it.
           if (!captured.isNote && settingsRef.current.lastBook !== captured.source.path) {
             changeRef.current({lastBook: captured.source.path});
+          }
+          // Measure the highlight drift while a document is actually open,
+          // which is the only time it can be measured -- the settings screen
+          // has none, which is why asking there hung. Once per run, in the
+          // background, and it writes nothing.
+          if (!captured.isNote && settingsRef.current.cloudToken && !calibrated.current) {
+            calibrated.current = true;
+            void calibrate(settingsRef.current.cloudToken, captured.source.path, pageText).catch(
+              err => log(`calibrate: ${err instanceof Error ? err.message : String(err)}`),
+            );
           }
         } catch (err) {
           log(`anchor: unavailable (${err instanceof Error ? err.message : String(err)})`);

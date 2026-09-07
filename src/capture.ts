@@ -245,6 +245,33 @@ export async function positionInPage(
   }
 }
 
+/**
+ * The text of any page of the document on screen.
+ *
+ * Any page, not only the one being read -- which is what makes calibrating the
+ * highlight possible without navigating anywhere.
+ *
+ * Answers with nothing rather than hanging: a native call that never settles
+ * would leave whatever is waiting on it waiting for ever, which is how a
+ * diagnostic once greyed out the settings screen and kept it that way.
+ */
+export async function pageText(page: number): Promise<string> {
+  try {
+    const answer = await Promise.race([
+      PluginDocAPI.getCurrentDocText(page),
+      new Promise(resolve => setTimeout(() => resolve(null), 6000)),
+    ]);
+    if (!answer) {
+      log(`pageText: page ${page} did not answer in time`);
+      return '';
+    }
+    return unwrap<string>(answer, 'getCurrentDocText');
+  } catch (err) {
+    log(`pageText: page ${page} unavailable (${err instanceof Error ? err.message : String(err)})`);
+    return '';
+  }
+}
+
 /** Where a lookup was started from, so a result can be written back to it. */
 export interface SourceRef {
   path: string;
