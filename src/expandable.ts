@@ -57,8 +57,18 @@ const HIT_PAD = 30;
 
 /** Where opened text is drawn, and the room it may take. */
 const GAP = 16;
-const MARGIN = 60;
 const TEXT_FONT = 34;
+
+/**
+ * How far in from every edge anything may be written.
+ *
+ * The toolbar can be docked on any of the four sides and nothing in the SDK
+ * reports where it is or how wide it is -- `PluginManager` mentions toolbars
+ * only to register buttons on them. So the same inset is kept on all four
+ * edges, wide enough for the bar wherever it has been put. Erring wide costs a
+ * little room; erring narrow puts the pencil somewhere no tap can reach it.
+ */
+const MARGIN = 120;
 
 /**
  * A box that fits its label.
@@ -151,12 +161,19 @@ function freeSpot(
 ): Rect | null {
   const candidates: Rect[] = [];
   const beside = writing.right + GAP;
-  if (beside + width <= pageWidth - GAP) {
-    const top = Math.max(GAP, Math.min(writing.bottom - height, pageHeight - height - GAP));
+  if (beside + width <= pageWidth - MARGIN) {
+    const top = Math.max(
+      MARGIN,
+      Math.min(writing.bottom - height, pageHeight - height - MARGIN),
+    );
     candidates.push({left: beside, top, right: beside + width, bottom: top + height});
   }
-  const left = Math.min(writing.left, pageWidth - width - GAP);
-  for (let top = writing.bottom + GAP; top + height <= pageHeight - GAP; top += height + GAP) {
+  const left = Math.max(MARGIN, Math.min(writing.left, pageWidth - width - MARGIN));
+  for (
+    let top = Math.max(MARGIN, writing.bottom + GAP);
+    top + height <= pageHeight - MARGIN;
+    top += height + GAP
+  ) {
     candidates.push({left, top, right: left + width, bottom: top + height});
   }
   for (const spot of candidates) {
@@ -460,7 +477,7 @@ export async function tapped(x: number, y: number): Promise<void> {
   }
 
   if (clipping.openRect) {
-    await shut(path, page, clipping.id, clipping.openRect);
+    await shut(path, page, clipping.id, clipping.openRect, clipping.openText);
   } else {
     await draw(path, page, clipping.id, clipping.rect, clipping.text);
   }
@@ -484,24 +501,58 @@ export async function tapped(x: number, y: number): Promise<void> {
  * is read from the page at this moment rather than remembered, because
  * numbering has gaps and is reused -- a remembered one would delete a stroke.
  */
-async function shut(path: string, page: number, id: string, openRect: Rect): Promise<void> {
+async function shut(
+  path: string,
+  page: number,
+  id: string,
+  openRect: Rect,
+  openText: string | undefined,
+): Promise<void> {
   const elements = unwrap<Record<string, unknown>[]>(await PluginFileAPI.getElements(page, path));
-  const open = Array.isArray(elements)
-    ? elements.find(element => {
-        const r = (element.textBox as {textRect?: Rect} | undefined)?.textRect;
-        return (
-          Number(element.type) === TYPE_TEXT &&
-          r != null &&
-          Math.abs(r.left - openRect.left) <= 2 &&
-          Math.abs(r.top - openRect.top) <= 2
-        );
-      })
-    : undefined;
+  const texts = Array.isArray(elements)
+    ? elements.filter(element => Number(element.type) === TYPE_TEXT)
+    : [];
+
+  const boxOf = (element: Record<string, unknown>) =>
+    element.textBox as {textRect?: Rect; textContentFull?: string} | undefined;
+
+  // What it says first, where it was second. Moving the pencil while it is
+  // open leaves the text behind, so the recorded rectangle points at bare
+  // paper -- shutting by rectangle alone deleted nothing and left the text
+  // stranded on the page with no pencil that would ever take it away again.
+  let open: Record<string, unknown> | undefined;
+  if (openText) {
+    const saying = texts.filter(element => boxOf(element)?.textContentFull === openText);
+    if (saying.length === 1) {
+      open = saying[0];
+    } else if (saying.length > 1) {
+      // Two clippings of the same passage. The nearer to where this one was
+      // last seen is this one.
+      let best = Infinity;
+      for (const element of saying) {
+        const r = boxOf(element)?.textRect;
+        if (!r) {
+          continue;
+        }
+        const distance = (r.left - openRect.left) ** 2 + (r.top - openRect.top) ** 2;
+        if (distance < best) {
+          best = distance;
+          open = element;
+        }
+      }
+    }
+  }
+  if (!open) {
+    open = texts.find(element => {
+      const r = boxOf(element)?.textRect;
+      return r != null && samePlace(r, openRect);
+    });
+  }
 
   if (!open) {
     // The user deleted it by hand. Shut is still the right outcome.
-    log(`expandable: nothing open at ${openRect.left},${openRect.top} — marking ${id} shut`);
-    await updateClipping(id, {openRect: undefined});
+    log(`expandable: nothing open to shut for ${id} — marking it shut`);
+    await updateClipping(id, {openRect: undefined, openText: undefined});
     return;
   }
 
@@ -520,7 +571,7 @@ async function shut(path: string, page: number, id: string, openRect: Rect): Pro
     log(`expandable: delete threw — ${err instanceof Error ? err.message : String(err)}`);
     return;
   }
-  await updateClipping(id, {openRect: undefined});
+  await updateClipping(id, {openRect: undefined, openText: undefined});
 }
 /**
  * Write the kept words onto the page, just below their icon.
@@ -563,6 +614,31 @@ async function draw(
   let top = iconRect.bottom + GAP;
   if (top + needed > room) {
     top = Math.max(MARGIN, room - needed);
+  }
+
+  // Prefer a band with nothing in it. Only what the device will describe can
+  // be avoided -- text boxes and links carry rectangles, handwriting does not:
+  // a stroke reports no bounds at all, only its sample points, held in native
+  // cache and far too costly to read on every tap. So this steers clear of
+  // boxes and links, and ink is a genuine trade-off rather than an oversight.
+  const onPage = unwrap<Record<string, unknown>[]>(await PluginFileAPI.getElements(page, path));
+  const taken = Array.isArray(onPage) ? occupied(onPage) : [];
+  if (taken.length > 0) {
+    const tries: number[] = [];
+    for (let t = top; t + needed <= room; t += TEXT_FONT) {
+      tries.push(t);
+    }
+    for (let t = MARGIN; t + needed <= room; t += TEXT_FONT) {
+      tries.push(t);
+    }
+    const clear = tries.find(
+      t => !taken.some(other => overlaps({left, top: t, right, bottom: t + needed}, other)),
+    );
+    if (clear != null) {
+      top = clear;
+    } else {
+      log('expandable: opening over something — no clear band wide enough on this page');
+    }
   }
   const available = room - top;
   if (available < TEXT_FONT * 2) {
@@ -624,5 +700,5 @@ async function draw(
 
   // Recorded only after the write succeeded, so a failed open leaves the
   // clipping shut rather than pointing at text that is not there.
-  await updateClipping(id, {openRect});
+  await updateClipping(id, {openRect, openText: shown});
 }

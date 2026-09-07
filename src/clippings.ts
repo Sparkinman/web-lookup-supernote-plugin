@@ -58,6 +58,15 @@ export interface Clipping {
   text: string;
   /** Where the opened text sits, while it is open. Absent when shut. */
   openRect?: Rect;
+  /**
+   * Exactly what was written into the opened box.
+   *
+   * The rectangle alone is not enough to find it again: moving the pencil
+   * while it is open leaves the text where it was, and shutting by rectangle
+   * then deletes nothing and abandons it on the page. Matching what it says
+   * finds it wherever it has ended up.
+   */
+  openText?: string;
 }
 
 async function readAll(): Promise<Record<string, unknown>> {
