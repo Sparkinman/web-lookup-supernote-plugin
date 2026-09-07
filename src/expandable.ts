@@ -1,24 +1,32 @@
 /**
- * Round B: put one icon on a page and prove the page survives it.
+ * Tap an icon to open the clipping it carries, tap it again to shut it.
  *
- * The previous attempt destroyed a page, and the cause is known: calling
- * `saveCurrentNote` after an element write pushes the plugin's stale cached
- * copy of the page back over the real file, taking everything on it.
- * Collapse/Expand says so twice in its own source, beside its writes and beside
- * its deletion. Nothing here saves. `reloadFile` refreshes the cache instead,
- * which is what that plugin does.
+ * Two rules govern every write here, both learned by destroying a page.
  *
- * Round A established the two things this rests on. A finger tap at 1089,930
- * was reported inside a text box at 974,926..1174,978, so motion coordinates
- * and element rectangles share one space and a hit test is arithmetic. And a
- * page of eleven strokes numbered its text box `numInPage=14`, not 12 -- the
- * numbering has gaps, so it is always read and never inferred.
+ * Save BEFORE writing, never after. Strokes the user has just drawn live only
+ * in the note app's memory until something flushes them. An element write goes
+ * straight to the file, and the `reloadFile` that must follow it replaces the
+ * in-memory page with what is on disk -- so anything unflushed is gone. That is
+ * what took seven strokes off a twenty-one element page. `saveCurrentNote`
+ * first commits them; `saveCurrentNote` afterwards would do the opposite and
+ * push the plugin's stale cached copy back over the write, which is what took
+ * the page before that. Collapse/Expand says both, and does exactly this.
  *
- * This round writes one element and then reads the page back, so the log says
- * plainly whether everything that was there before is still there.
+ * Read a mark with `getElement`, not `getElements`. The page listing comes back
+ * with `userData` stripped -- an icon written with sixty-eight characters of it
+ * read back as MISSING, and every tap on it reported `userData=NONE`. Fetching
+ * that one element by its own number returns the mark intact. Collapse/Expand
+ * carries a probe for the same gap. Note the argument orders differ:
+ * `getElements(page, path)` against `getElement(path, page, num)`.
+ *
+ * Round A established the rest. A finger tap at 1089,930 was reported inside a
+ * text box at 974,926..1174,978, so motion coordinates and element rectangles
+ * share one space and a hit test is arithmetic. And a page of eleven strokes
+ * numbered its text box `numInPage=14`, not 12 -- the numbering has gaps, so it
+ * is always read and never inferred.
  */
 
-import {PluginCommAPI, PluginFileAPI} from 'sn-plugin-lib';
+import {PluginCommAPI, PluginFileAPI, PluginNoteAPI} from 'sn-plugin-lib';
 
 import type {Anchor, Rect} from './capture';
 import {log} from './log';
@@ -66,6 +74,58 @@ function unwrap<T>(res: unknown): T | null {
   return parsed?.success && parsed.result != null ? parsed.result : null;
 }
 
+/**
+ * Commit whatever the user has drawn but not yet saved.
+ *
+ * Must run before every element write. Without it the `reloadFile` that follows
+ * the write discards every stroke made since the last flush -- the page loses
+ * work the user watched themselves do, which is the worst failure this plugin
+ * has. Returns false if the note app refused, and the caller then writes
+ * nothing: no icon is worth a page.
+ */
+async function flush(): Promise<boolean> {
+  try {
+    const response = (await PluginNoteAPI.saveCurrentNote()) as LooseResponse<boolean> | null;
+    if (!response?.success) {
+      log(`expandable: save refused — ${response?.error?.message ?? 'no reason given'}`);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    log(`expandable: save threw — ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
+}
+
+/**
+ * The `userData` of one element, read the only way that returns it.
+ *
+ * `getElements` drops the field, so an element from that listing is asked for
+ * again by number. Falls back to whatever the listing held, in case a firmware
+ * elsewhere does the reverse.
+ */
+async function markOf(
+  path: string,
+  page: number,
+  element: Record<string, unknown>,
+): Promise<string> {
+  const listed = typeof element.userData === 'string' ? element.userData : '';
+  if (listed) {
+    return listed;
+  }
+  const num = Number(element.numInPage);
+  if (!Number.isFinite(num)) {
+    return '';
+  }
+  try {
+    const fetched = unwrap<Record<string, unknown>>(await PluginFileAPI.getElement(path, page, num));
+    return typeof fetched?.userData === 'string' ? fetched.userData : '';
+  } catch (err) {
+    log(`expandable: reading the mark of #${num} threw — ${err instanceof Error ? err.message : String(err)}`);
+    return '';
+  }
+}
+
 /** Read the page and say what is on it, for comparing before with after. */
 async function census(path: string, page: number, when: string): Promise<number> {
   const elements = unwrap<Record<string, unknown>[]>(await PluginFileAPI.getElements(page, path));
@@ -107,6 +167,11 @@ export async function placeIcon(
   const before = await census(path, page, 'before');
   if (before < 0) {
     return 'the page could not be read, so nothing was written';
+  }
+
+  // Before anything is written, and before the reload that must follow it.
+  if (!(await flush())) {
+    return 'your latest strokes could not be saved, so nothing was written';
   }
 
   const id = `${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
@@ -161,9 +226,8 @@ export async function placeIcon(
     }
   }
 
-  // Not saveCurrentNote. Reads come from a cache that lags an element write,
-  // and saving inside that window writes the stale cache over the real file --
-  // which is exactly what destroyed a page.
+  // The save happened before the write, never here: saving now would push the
+  // plugin's stale cached page back over the element just inserted.
   try {
     const reloaded = (await PluginCommAPI.reloadFile()) as LooseResponse<boolean> | null;
     log(`expandable: reloadFile ${reloaded?.success ? 'ok' : JSON.stringify(reloaded ?? null)}`);
@@ -180,7 +244,7 @@ export async function placeIcon(
         return b?.textRect?.left === left && b?.textRect?.top === top;
       })
     : undefined;
-  const kept = typeof mine?.userData === 'string' ? mine.userData : '';
+  const kept = mine ? await markOf(path, page, mine) : '';
   log(
     `expandable: read back — ${mine ? `found at ${left},${top}` : 'NOT FOUND'}, ` +
       `userData ${kept ? `${kept.length} chars` : 'MISSING'}`,
@@ -221,29 +285,13 @@ export async function tapped(x: number, y: number): Promise<void> {
     return;
   }
 
-  // What the tap is over, and what each of those carries. The icon placed last
-  // time came back with no userData at all, so the mark that identifies it as
-  // ours was lost somewhere between being set and being read -- and this says
-  // which of those it is.
-  for (const element of elements) {
-    const box = element.textBox as {textRect?: Rect; textContentFull?: string} | undefined;
-    const r = box?.textRect;
-    if (!r || x < r.left - HIT_PAD || x > r.right + HIT_PAD || y < r.top - HIT_PAD || y > r.bottom + HIT_PAD) {
-      continue;
-    }
-    const data = typeof element.userData === 'string' ? element.userData : '';
-    log(
-      `tap: over #${String(element.numInPage)} "${String(box?.textContentFull ?? '').slice(0, 20)}" ` +
-        `userData=${data ? `${data.length} chars starting "${data.slice(0, 24)}"` : 'NONE'}`,
-    );
-  }
-
-  const icon = elements.find(element => {
-    const data = typeof element.userData === 'string' ? element.userData : '';
-    const box = element.textBox as {textRect?: Rect} | undefined;
-    const r = box?.textRect;
+  // Only what the tap actually landed on is asked about. The mark comes from a
+  // second read per candidate, because the page listing above returns none --
+  // and candidates are nearly always none or one, so this costs nothing on the
+  // overwhelming majority of taps, which hit no icon at all.
+  const under = elements.filter(element => {
+    const r = (element.textBox as {textRect?: Rect} | undefined)?.textRect;
     return (
-      data.startsWith(ICON_MARK) &&
       r != null &&
       x >= r.left - HIT_PAD &&
       x <= r.right + HIT_PAD &&
@@ -251,6 +299,23 @@ export async function tapped(x: number, y: number): Promise<void> {
       y <= r.bottom + HIT_PAD
     );
   });
+
+  let icon: Record<string, unknown> | undefined;
+  let mark = '';
+  for (const element of under) {
+    const data = await markOf(path, page, element);
+    const label = String(
+      (element.textBox as {textContentFull?: string} | undefined)?.textContentFull ?? '',
+    ).slice(0, 20);
+    log(
+      `tap: over #${String(element.numInPage)} "${label}" ` +
+        `userData=${data ? `${data.length} chars starting "${data.slice(0, 24)}"` : 'NONE'}`,
+    );
+    if (!icon && data.startsWith(ICON_MARK)) {
+      icon = element;
+      mark = data;
+    }
+  }
   if (!icon) {
     log('tap: nothing of ours under it');
     return;
@@ -258,15 +323,33 @@ export async function tapped(x: number, y: number): Promise<void> {
 
   let carried: {id: string; text: string};
   try {
-    carried = JSON.parse(String(icon.userData).slice(ICON_MARK.length));
+    carried = JSON.parse(mark.slice(ICON_MARK.length));
   } catch {
     log('expandable: an icon of ours carries something unreadable');
     return;
   }
 
+  // Is this one already open? Only text elements can be the opened text, and a
+  // page holds a handful of those, so each is asked for its mark.
   const openMark = `${OPEN_MARK}${carried.id}`;
-  const open = elements.find(element => element.userData === openMark);
+  let open: Record<string, unknown> | undefined;
+  for (const element of elements) {
+    if (Number(element.type) !== TYPE_TEXT || element === icon) {
+      continue;
+    }
+    if ((await markOf(path, page, element)) === openMark) {
+      open = element;
+      break;
+    }
+  }
+
   const before = await census(path, page, `tap on ${carried.id}: before`);
+
+  // Same rule as placing one: commit the user's ink before touching the file.
+  if (!(await flush())) {
+    log('expandable: not writing — your latest strokes could not be saved first');
+    return;
+  }
 
   if (open) {
     // The number is taken from this read rather than remembered: numbering has
