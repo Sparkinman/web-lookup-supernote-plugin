@@ -8,7 +8,7 @@
  */
 
 import {NativeModules} from 'react-native';
-import {PluginFileAPI, PluginNoteAPI} from 'sn-plugin-lib';
+import {PluginCommAPI, PluginFileAPI, PluginNoteAPI} from 'sn-plugin-lib';
 
 import type {Anchor, Rect} from './capture';
 import type {CaptureMode} from './settings';
@@ -29,8 +29,14 @@ export interface Drawn {
 }
 
 interface ClipNative {
-  render(name: string, title: string, source: string, sectionsJson: string): Promise<Drawn>;
-  captureView(tag: number, name: string): Promise<Drawn>;
+  render(
+    name: string,
+    title: string,
+    source: string,
+    sectionsJson: string,
+    folder: string,
+  ): Promise<Drawn>;
+  captureView(tag: number, name: string, folder: string): Promise<Drawn>;
 }
 
 const native: ClipNative | undefined = NativeModules.LookUpClip;
@@ -95,6 +101,8 @@ export interface ClipRequest {
   sourceUrls: string[];
   /** What the link to the saved clipping is called on the page. */
   notesLabel: string;
+  /** Where the drawn image is written, from settings. */
+  folder: string;
 }
 
 /**
@@ -122,6 +130,7 @@ export async function attachClip(
       request.title,
       request.source,
       JSON.stringify(request.sections),
+      request.folder,
     );
   } catch (err) {
     return err instanceof Error ? err.message : 'the clipping could not be drawn';
@@ -146,6 +155,7 @@ export async function attachScreenshot(
   sourceUrls: string[],
   mode: CaptureMode,
   notesLabel: string,
+  folder: string,
 ): Promise<string | null> {
   const refusal = refuse(anchor);
   if (refusal) {
@@ -156,7 +166,7 @@ export async function attachScreenshot(
   }
   let drawn: Drawn;
   try {
-    drawn = await native!.captureView(viewTag, `shot-${Date.now()}`);
+    drawn = await native!.captureView(viewTag, `shot-${Date.now()}`, folder);
   } catch (err) {
     return err instanceof Error ? err.message : 'the screen could not be captured';
   }
@@ -510,6 +520,7 @@ export async function drawClip(request: {
   title: string;
   source: string;
   sections: ClipSection[];
+  folder: string;
 }): Promise<Drawn | null> {
   if (!native) {
     return null;
@@ -520,6 +531,7 @@ export async function drawClip(request: {
       request.title,
       request.source,
       JSON.stringify(request.sections),
+      request.folder,
     );
   } catch (err) {
     log(`digest: clipping could not be drawn (${err instanceof Error ? err.message : String(err)})`);
@@ -637,7 +649,11 @@ export async function appendDigest(
       const drawnWidth = Math.floor(entry.image.width * scale);
       const drawnHeight = Math.floor(entry.image.height * scale);
       elements.push({
-        type: 300,
+        // 200, from Element.TYPE_PICTURE. Worth naming because the schema has
+        // no case for a picture -- it falls through to the default and is
+        // passed to the device unvalidated, so a wrong number here fails with
+        // no complaint from the SDK at all.
+        type: 200,
         pageNum: page,
         layerNum: 0,
         picture: {
@@ -686,46 +702,90 @@ export async function appendDigest(
  */
 async function freshPage(notePath: string): Promise<number | string> {
   const total = await noteLength(notePath);
+  const templates = await templateCandidates();
+
   if (total === null) {
-    try {
-      const created = (await PluginFileAPI.createNote({
-        notePath,
-        template: '',
-        mode: 0,
-        isPortrait: true,
-      })) as LooseResponse<boolean> | null | undefined;
-      if (!created?.success) {
-        const why = created?.error?.message ?? 'the device refused to create it';
-        log(`digest: could not create ${notePath} — ${why}`);
-        return `the lookup note could not be created (${why})`;
+    let last = 'the device refused to create it';
+    for (const template of templates) {
+      try {
+        const created = (await PluginFileAPI.createNote({
+          notePath,
+          template,
+          mode: 0,
+          isPortrait: true,
+        })) as LooseResponse<boolean> | null | undefined;
+        // A false `result` with success true means it declined without saying
+        // why, which is as much a failure as an error is.
+        if (created?.success && created.result !== false) {
+          log(`digest: created ${notePath} with template "${template}"`);
+          // A new note already has one blank page; using it beats adding a second.
+          return 0;
+        }
+        last = created?.error?.message ?? 'the device declined without saying why';
+      } catch (err) {
+        last = err instanceof Error ? err.message : 'an unknown error';
       }
-      log(`digest: created ${notePath}`);
-      // A new note already has one blank page; using it beats adding a second.
-      return 0;
-    } catch (err) {
-      const why = err instanceof Error ? err.message : 'an unknown error';
-      log(`digest: createNote threw — ${why}`);
-      return `the lookup note could not be created (${why})`;
+      log(`digest: createNote rejected template "${template}" — ${last}`);
     }
+    return `the lookup note could not be created (${last})`;
   }
 
-  try {
-    const inserted = (await PluginFileAPI.insertNotePage({
-      notePath,
-      page: total,
-      template: '',
-    })) as LooseResponse<boolean> | null | undefined;
-    if (!inserted?.success) {
-      const why = inserted?.error?.message ?? 'the device refused the page';
-      log(`digest: could not add a page to ${notePath} — ${why}`);
-      return `no page could be added to the lookup note (${why})`;
+  let last = 'the device refused the page';
+  for (const template of templates) {
+    try {
+      const inserted = (await PluginFileAPI.insertNotePage({
+        notePath,
+        page: total,
+        template,
+      })) as LooseResponse<boolean> | null | undefined;
+      if (inserted?.success && inserted.result !== false) {
+        log(`digest: added page ${total} with template "${template}"`);
+        return total;
+      }
+      last = inserted?.error?.message ?? 'the device declined without saying why';
+    } catch (err) {
+      last = err instanceof Error ? err.message : 'an unknown error';
     }
-    return total;
-  } catch (err) {
-    const why = err instanceof Error ? err.message : 'an unknown error';
-    log(`digest: insertNotePage threw — ${why}`);
-    return `no page could be added to the lookup note (${why})`;
+    log(`digest: insertNotePage rejected template "${template}" — ${last}`);
   }
+  return `no page could be added to the lookup note (${last})`;
+}
+
+/**
+ * Template strings to try, in order, when making a note or a page.
+ *
+ * Both calls insist on a non-empty template -- an empty string is rejected
+ * outright with "template cannot be an empty string" -- and neither documents
+ * what a valid one looks like. The built-in list is the only authority, and
+ * whether the firmware wants a template's name or its URI is undocumented, so
+ * both spellings of the first few go in and the first that works wins.
+ */
+async function templateCandidates(): Promise<string[]> {
+  const candidates: string[] = [];
+  try {
+    const listed = await PluginCommAPI.getNoteSystemTemplates();
+    // Unlike most of the SDK this resolves to a bare array, not an APIResponse.
+    if (Array.isArray(listed)) {
+      for (const entry of listed.slice(0, 4)) {
+        const template = entry as {name?: string; vUri?: string};
+        if (template?.name) {
+          candidates.push(template.name);
+        }
+        if (template?.vUri) {
+          candidates.push(template.vUri);
+        }
+      }
+    }
+  } catch (err) {
+    log(`digest: could not list templates (${err instanceof Error ? err.message : String(err)})`);
+  }
+  if (candidates.length === 0) {
+    // Nothing to go on. "none" is what the firmware calls a blank page in its
+    // own template list, so it is the least unreasonable guess left.
+    candidates.push('none', 'blank');
+  }
+  log(`digest: template candidates ${candidates.map(c => `"${c}"`).join(', ')}`);
+  return candidates;
 }
 
 /** How many pages the note has, or null when there is no such note yet. */

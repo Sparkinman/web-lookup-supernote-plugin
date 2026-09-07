@@ -47,17 +47,24 @@ class ClipModule(reactContext: ReactApplicationContext) :
    * and nothing else, which is what "screenshot" ought to mean anyway.
    */
   @ReactMethod
-  fun captureView(tag: Int, name: String, promise: Promise) {
+  fun captureView(tag: Int, name: String, folder: String, promise: Promise) {
     UiThreadUtil.runOnUiThread {
       try {
         val manager = reactApplicationContext.getNativeModule(UIManagerModule::class.java)
-        val view = manager?.resolveView(tag)
-        if (view == null || view.width <= 0 || view.height <= 0) {
+        val resolved = manager?.resolveView(tag)
+        if (resolved == null || resolved.width <= 0 || resolved.height <= 0) {
           promise.reject("CAPTURE_FAILED", "The reader had nothing laid out to capture")
           return@runOnUiThread
         }
 
-        val dir = File(Environment.getExternalStorageDirectory(), CLIP_DIR)
+        // Deliberately the view as displayed, scroll position and all. A
+        // screenshot is wanted for the times the arrangement on screen is
+        // itself the thing worth keeping, and expanding it to the whole
+        // scrollable page would quietly turn it into a different feature.
+        val view = resolved
+        LogFile.append("clip: capturing ${view.width}x${view.height} as displayed")
+
+        val dir = folderOf(folder)
         if (!dir.exists() && !dir.mkdirs()) {
           promise.reject("CAPTURE_FAILED", "Could not create ${dir.absolutePath}")
           return@runOnUiThread
@@ -70,6 +77,7 @@ class ClipModule(reactContext: ReactApplicationContext) :
         canvas.drawColor(Color.WHITE)
         view.draw(canvas)
 
+
         val file = File(dir, if (name.endsWith(".png")) name else "$name.png")
         file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
         bitmap.recycle()
@@ -81,6 +89,26 @@ class ClipModule(reactContext: ReactApplicationContext) :
         promise.reject("CAPTURE_FAILED", t.message ?: t.toString(), t)
       }
     }
+  }
+
+  /**
+   * Where images are written, as chosen in settings.
+   *
+   * A relative folder is taken against shared storage so a setting can be typed
+   * as "Document/LookUp/clips" rather than with the emulated-storage prefix,
+   * which is not something anyone should have to know. An absolute path is
+   * honoured as given, and an empty one falls back to the default rather than
+   * writing to the root of the card.
+   */
+  private fun folderOf(folder: String): File {
+    val trimmed = folder.trim().trimEnd('/')
+    if (trimmed.isEmpty()) {
+      return File(Environment.getExternalStorageDirectory(), CLIP_DIR)
+    }
+    if (trimmed.startsWith("/")) {
+      return File(trimmed)
+    }
+    return File(Environment.getExternalStorageDirectory(), trimmed)
   }
 
   /**
@@ -110,9 +138,16 @@ class ClipModule(reactContext: ReactApplicationContext) :
    * ambiguous about which result said what.
    */
   @ReactMethod
-  fun render(name: String, title: String, source: String, sectionsJson: String, promise: Promise) {
+  fun render(
+      name: String,
+      title: String,
+      source: String,
+      sectionsJson: String,
+      folder: String,
+      promise: Promise
+  ) {
     try {
-      val dir = File(Environment.getExternalStorageDirectory(), CLIP_DIR)
+      val dir = folderOf(folder)
       if (!dir.exists() && !dir.mkdirs()) {
         promise.reject("CLIP_FAILED", "Could not create ${dir.absolutePath}")
         return
@@ -319,7 +354,7 @@ class ClipModule(reactContext: ReactApplicationContext) :
     private const val HEADING_SIZE = 42f
     private const val URL_SIZE = 34f
     private const val BODY_SIZE = 38f
-    private const val MAX_CHARS = 3000
+    private const val MAX_CHARS = 12000
     private val GREY = Color.rgb(90, 90, 90)
   }
 }

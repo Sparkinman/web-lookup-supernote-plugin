@@ -57,8 +57,14 @@ import {
   saveSettings,
   type Settings,
 } from './src/settings';
+import {FolderPicker} from './src/FolderPicker';
 import {get, openExternally, WEB_AVAILABLE} from './src/web';
-import {onButtonPress, takePendingButton} from './index';
+import {
+  onButtonPress,
+  onConfigPress,
+  takePendingButton,
+  takePendingConfig,
+} from './index';
 
 /** How long the confirmation stays up before the panel closes, in milliseconds. */
 const CLOSE_DELAY = 700;
@@ -86,6 +92,8 @@ export default function App(): React.JSX.Element {
   const [busy, setBusy] = useState(false);
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [showSettings, setShowSettings] = useState(false);
+  /** Which setting the folder browser is currently choosing for, if any. */
+  const [picking, setPicking] = useState<'clips' | 'digest' | null>(null);
   /** The part of the panel a screenshot photographs: the reader, not the chrome. */
   const readerRef = useRef<View>(null);
   /**
@@ -253,7 +261,11 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     (async () => {
       const buttonId = takePendingButton();
-      log(`mount: button=${buttonId} nativeLog=${LOG_AVAILABLE} web=${WEB_AVAILABLE}`);
+      const fromConfig = takePendingConfig();
+      log(
+        `mount: button=${buttonId} config=${fromConfig} ` +
+          `nativeLog=${LOG_AVAILABLE} web=${WEB_AVAILABLE}`,
+      );
 
       // Before anything else, so the rest of this run reaches the log file
       // rather than only the console.
@@ -272,6 +284,12 @@ export default function App(): React.JSX.Element {
       lensRef.current = remembered;
       setLens(remembered);
       log(`settings: lens=${loaded.lens} bookQuery=${loaded.bookQuery}`);
+      if (fromConfig) {
+        // Opened to be configured, not to look anything up. Starting a lookup
+        // as well would put a search behind the settings for no reason.
+        setShowSettings(true);
+        return;
+      }
       await startFromButton(buttonId);
     })();
     // Deliberately once: this is the "why did the panel open" step, and
@@ -281,6 +299,9 @@ export default function App(): React.JSX.Element {
 
   /** Later presses, while the panel is already up. */
   useEffect(() => onButtonPress(startFromButton), [startFromButton]);
+
+  /** The management screen's settings button, pressed while the panel is up. */
+  useEffect(() => onConfigPress(() => setShowSettings(true)), []);
 
   /**
    * Close the panel now that the note has what it came for.
@@ -312,6 +333,10 @@ export default function App(): React.JSX.Element {
   /** Follow a link from a result list or an article. */
   const follow = useCallback(
     (href: string) => {
+      // Logged because "the arrow went somewhere else" is otherwise
+      // indistinguishable in a log from "the arrow was missed and the passage
+      // got picked instead" -- the two have opposite fixes.
+      log(`follow: ${href}`);
       if (url) {
         setHistory(prev => [...prev, url]);
       }
@@ -397,6 +422,7 @@ export default function App(): React.JSX.Element {
                     source: [reference(anchor), page.viewerUrl ?? url ?? '']
                       .filter(Boolean)
                       .join('\n'),
+                    folder: settings.clipFolder,
                     sections: order
                       .map(i => page.blocks[i])
                       .filter((block): block is Block => Boolean(block))
@@ -475,6 +501,7 @@ export default function App(): React.JSX.Element {
         sections,
         sourceUrls: chosenUrls(kept),
         notesLabel: labelOr(settings.notesLabel, DEFAULT_SETTINGS.notesLabel),
+        folder: settings.clipFolder,
       });
       if (failure) {
         log(`clip failed: ${failure}`);
@@ -513,6 +540,7 @@ export default function App(): React.JSX.Element {
         chosenUrls(),
         mode,
         labelOr(settings.notesLabel, DEFAULT_SETTINGS.notesLabel),
+        settings.clipFolder,
       );
       if (failure) {
         log(`screenshot failed: ${failure}`);
@@ -566,9 +594,15 @@ export default function App(): React.JSX.Element {
           autoCorrect={false}
         />
 
-        <TouchableOpacity style={styles.btn} onPress={() => setShowSettings(v => !v)}>
-          <Text style={styles.btnText}>{showSettings ? 'Done' : 'Settings'}</Text>
-        </TouchableOpacity>
+        {/* No Settings button here. Settings open from the device's plugin
+            management screen, beside the install and the permissions, which is
+            where a person goes to change how a plugin behaves -- this panel is
+            opened from a lasso to do one thing and closed again. */}
+        {showSettings ? (
+          <TouchableOpacity style={styles.btn} onPress={() => setShowSettings(false)}>
+            <Text style={styles.btnText}>Done</Text>
+          </TouchableOpacity>
+        ) : null}
 
         <TouchableOpacity style={styles.btn} onPress={() => PluginManager.closePluginView()}>
           <Text style={styles.btnText}>Close</Text>
@@ -680,9 +714,55 @@ export default function App(): React.JSX.Element {
             placeholder={DEFAULT_SETTINGS.digestNote}
             autoCorrect={false}
           />
+          <TouchableOpacity
+            style={[styles.choice, styles.browseBtn]}
+            onPress={() => setPicking(picking === 'digest' ? null : 'digest')}>
+            <Text style={styles.choiceLabel}>
+              {picking === 'digest' ? '▾ Close browser' : '▸ Browse for a folder'}
+            </Text>
+          </TouchableOpacity>
+          <FolderPicker
+            visible={picking === 'digest'}
+            initialPath={relativeOf(folderOf(settings.digestNote))}
+            onCancel={() => setPicking(null)}
+            onPick={chosen => {
+              // The browser chooses a folder; the note keeps the name it has,
+              // since naming a file is not something a folder browser does.
+              change({digestNote: `${STORAGE_ROOT}/${chosen}/${nameOf(settings.digestNote)}`});
+              setPicking(null);
+            }}
+          />
           <Text style={styles.choiceHint}>
             A book cannot be written into, so excerpts go here — one page each,
             with a link back to the page of the book they came from.
+          </Text>
+
+          <Text style={styles.settingsTitle}>Where clippings and screenshots are saved</Text>
+          <TextInput
+            style={styles.field}
+            value={settings.clipFolder}
+            onChangeText={value => change({clipFolder: value})}
+            placeholder={DEFAULT_SETTINGS.clipFolder}
+            autoCorrect={false}
+          />
+          <TouchableOpacity
+            style={[styles.choice, styles.browseBtn]}
+            onPress={() => setPicking(picking === 'clips' ? null : 'clips')}>
+            <Text style={styles.choiceLabel}>
+              {picking === 'clips' ? '▾ Close browser' : '▸ Browse for a folder'}
+            </Text>
+          </TouchableOpacity>
+          <FolderPicker
+            visible={picking === 'clips'}
+            initialPath={relativeOf(settings.clipFolder)}
+            onCancel={() => setPicking(null)}
+            onPick={chosen => {
+              change({clipFolder: chosen});
+              setPicking(null);
+            }}
+          />
+          <Text style={styles.choiceHint}>
+            A folder on the device. Relative names sit inside internal storage.
           </Text>
         </ScrollView>
       )}
@@ -744,7 +824,7 @@ export default function App(): React.JSX.Element {
               style={[styles.insert, busy && styles.btnOff]}
               onPress={screenshot}
               disabled={busy}>
-              <Text style={styles.insertText}>Screenshot the whole page</Text>
+              <Text style={styles.insertText}>Screenshot</Text>
             </TouchableOpacity>
           )}
           {anchor?.isNote && CLIP_AVAILABLE && (
@@ -759,6 +839,32 @@ export default function App(): React.JSX.Element {
       )}
     </View>
   );
+}
+
+/**
+ * Where shared storage is mounted.
+ *
+ * The folder browser speaks in paths relative to it, because that is how a
+ * person reads a location on this device; the settings that name files keep
+ * the absolute form, because that is what the SDK takes.
+ */
+const STORAGE_ROOT = '/storage/emulated/0';
+
+/** A stored path as the browser wants it: relative, no leading slash. */
+function relativeOf(path: string): string {
+  const trimmed = path.startsWith(STORAGE_ROOT) ? path.slice(STORAGE_ROOT.length) : path;
+  return trimmed.replace(/^\/+/, '').replace(/\/+$/, '');
+}
+
+/** Everything before the last slash. */
+function folderOf(path: string): string {
+  const cut = path.lastIndexOf('/');
+  return cut > 0 ? path.slice(0, cut) : path;
+}
+
+/** Everything after the last slash. */
+function nameOf(path: string): string {
+  return path.slice(path.lastIndexOf('/') + 1) || 'Look Up.note';
 }
 
 /** A block as text, including a result's snippet. */
@@ -805,8 +911,11 @@ function Passage({
           // is a link is what decides whether tapping it goes somewhere.
           <View style={styles.linkRow}>
             <Text style={[styles.linkTag, picked && styles.pickedTag]}>LINK</Text>
-            <Text style={[styles.address, picked && styles.pickedText]} numberOfLines={1}>
-              {hostOf(block.href)}
+            {/* The whole address, not just the host. Two results from one site
+                showed as the same line, so which one an arrow would open was
+                impossible to tell before tapping it. */}
+            <Text style={[styles.address, picked && styles.pickedText]} numberOfLines={2}>
+              {block.href}
             </Text>
           </View>
         ) : null}
@@ -874,13 +983,15 @@ const styles = StyleSheet.create({
   block: {flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 12},
   // Text settings are typed rather than chosen, so they get a box that looks
   // like one: on e-ink an unbordered input is indistinguishable from a label.
+  browseBtn: {marginTop: 4},
   field: {
-    borderWidth: 1,
+    borderWidth: 2,
     borderColor: '#000',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     marginBottom: 4,
-    fontSize: 16,
+    fontSize: 18,
+    color: '#000',
   },
   // Inverted rather than tinted: a light grey wash is invisible on this display.
   blockPicked: {backgroundColor: '#000'},
@@ -910,22 +1021,36 @@ const styles = StyleSheet.create({
   },
   pickedTag: {color: '#fff', borderColor: '#fff'},
   settings: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     borderBottomWidth: 2,
     borderBottomColor: '#000',
     // Bounded because it scrolls now: left to grow it pushes the reader off the
     // bottom of the panel, which on a screen this size hides what is being read.
-    maxHeight: 360,
+    maxHeight: 520,
   },
   settingsSpacer: {height: 12},
-  settingsTitle: {fontSize: 15, fontWeight: '700', color: '#000', marginBottom: 8, marginTop: 10},
-  choice: {paddingVertical: 8, paddingHorizontal: 10, borderWidth: 1, borderColor: '#000', marginBottom: 6},
+  settingsTitle: {fontSize: 20, fontWeight: '700', color: '#000', marginBottom: 8, marginTop: 16},
+  choice: {paddingVertical: 12, paddingHorizontal: 14, borderWidth: 2, borderColor: '#000', marginBottom: 8},
   choiceOn: {backgroundColor: '#000'},
-  choiceLabel: {fontSize: 15, color: '#000', fontWeight: '600'},
-  choiceHint: {fontSize: 13, color: '#000', marginTop: 2},
-  followBtn: {paddingHorizontal: 14, paddingVertical: 10},
-  followText: {fontSize: 22, color: '#000'},
+  choiceLabel: {fontSize: 19, color: '#000', fontWeight: '600'},
+  choiceHint: {fontSize: 16, color: '#000', marginTop: 4},
+  // Bordered and large. This was a bare chevron with modest padding, which on
+  // e-ink read as decoration rather than a control and was easy to miss
+  // entirely -- a miss lands on the quote instead and picks it, so the tap
+  // appears to do the wrong thing rather than nothing.
+  followBtn: {
+    minWidth: 64,
+    minHeight: 64,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#000',
+    marginLeft: 8,
+    marginVertical: 8,
+  },
+  followText: {fontSize: 34, lineHeight: 38, color: '#000'},
   empty: {flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24},
   emptyText: {fontSize: 16, color: '#000', textAlign: 'center'},
   loading: {

@@ -1,6 +1,7 @@
 package com.snlookup
 
 import android.os.Environment
+import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
@@ -59,6 +60,49 @@ class SettingsModule(reactContext: ReactApplicationContext) :
     } catch (t: Throwable) {
       LogFile.append("settings: write failed $t")
       promise.reject("WRITE_FAILED", t.message ?: t.toString(), t)
+    }
+  }
+
+  /**
+   * The immediate subfolders of a path, relative to shared storage.
+   *
+   * One level at a time rather than a tree: a device holds thousands of
+   * folders, the panel is small, and a step-wise walk costs one call per
+   * screen. An empty path means the root of internal storage.
+   */
+  @ReactMethod
+  fun listDirs(relativePath: String, promise: Promise) {
+    try {
+      val root = Environment.getExternalStorageDirectory()
+      val dir = if (relativePath.isBlank()) root else File(root, relativePath)
+      val out = Arguments.createArray()
+      if (!dir.isDirectory) {
+        promise.resolve(out)
+        return
+      }
+      dir.listFiles()
+          ?.filter { it.isDirectory && !it.isHidden }
+          ?.sortedBy { it.name.lowercase() }
+          ?.forEach { out.pushString(it.name) }
+      promise.resolve(out)
+    } catch (t: Throwable) {
+      LogFile.append("settings: listDirs failed $t")
+      promise.reject("LIST_DIRS_FAILED", t.message ?: t.toString(), t)
+    }
+  }
+
+  /** Create a folder the user has named, so a new one can be picked. */
+  @ReactMethod
+  fun makeDirs(relativePath: String, promise: Promise) {
+    try {
+      val dir = File(Environment.getExternalStorageDirectory(), relativePath)
+      if (dir.isDirectory || dir.mkdirs()) {
+        promise.resolve(dir.absolutePath)
+      } else {
+        promise.reject("MKDIR_FAILED", "Could not create ${dir.absolutePath}")
+      }
+    } catch (t: Throwable) {
+      promise.reject("MKDIR_FAILED", t.message ?: t.toString(), t)
     }
   }
 

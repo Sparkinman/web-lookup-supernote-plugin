@@ -14,6 +14,8 @@ import {log} from './log';
 interface SettingsNative {
   read(): Promise<string | null>;
   write(contents: string): Promise<string>;
+  listDirs(relativePath: string): Promise<string[]>;
+  makeDirs(relativePath: string): Promise<string>;
 }
 
 const native: SettingsNative | undefined = NativeModules.LookUpSettings;
@@ -35,6 +37,14 @@ export type BookQuery = 'text' | 'withBook';
 /** Where excerpts taken from a book are collected. */
 export const DEFAULT_DIGEST_NOTE = '/storage/emulated/0/Note/Look Up.note';
 
+/**
+ * Where drawn clippings and screenshots are written.
+ *
+ * Relative to shared storage, so it reads as a place on the device rather than
+ * as an emulated-storage path. An absolute path is accepted too.
+ */
+export const DEFAULT_CLIP_FOLDER = 'Document/LookUp/clips';
+
 export interface Settings {
   /** Whether a picture of what was read is drawn and linked. */
   savePicture: boolean;
@@ -47,6 +57,8 @@ export interface Settings {
   notesLabel: string;
   /** The note that book excerpts are appended to, since a book cannot hold them. */
   digestNote: string;
+  /** Where clippings and screenshots are saved. */
+  clipFolder: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -61,6 +73,7 @@ export const DEFAULT_SETTINGS: Settings = {
   bookQuery: 'text',
   notesLabel: 'Notes',
   digestNote: DEFAULT_DIGEST_NOTE,
+  clipFolder: DEFAULT_CLIP_FOLDER,
 };
 
 /**
@@ -136,6 +149,10 @@ export async function loadSettings(): Promise<Settings> {
         typeof parsed.digestNote === 'string' && parsed.digestNote.trim()
           ? parsed.digestNote.trim()
           : DEFAULT_SETTINGS.digestNote,
+      clipFolder:
+        typeof parsed.clipFolder === 'string' && parsed.clipFolder.trim()
+          ? parsed.clipFolder.trim()
+          : DEFAULT_SETTINGS.clipFolder,
     };
   } catch (err) {
     log(`settings: could not read (${err instanceof Error ? err.message : String(err)})`);
@@ -151,6 +168,24 @@ export async function saveSettings(settings: Settings): Promise<void> {
     await native.write(JSON.stringify(settings, null, 2));
   } catch (err) {
     log(`settings: could not save (${err instanceof Error ? err.message : String(err)})`);
+  }
+}
+
+/**
+ * The immediate subfolders of a path, for the folder picker.
+ *
+ * Resolves to nothing rather than throwing: a browser that shows an empty
+ * folder is usable, one that crashes the settings screen is not.
+ */
+export async function listDirs(relativePath: string): Promise<string[]> {
+  if (!native?.listDirs) {
+    return [];
+  }
+  try {
+    return await native.listDirs(relativePath);
+  } catch (err) {
+    log(`settings: listDirs failed (${err instanceof Error ? err.message : String(err)})`);
+    return [];
   }
 }
 

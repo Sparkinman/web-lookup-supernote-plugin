@@ -94,6 +94,16 @@ PluginManager.registerButton(3, ['DOC'], {
 });
 
 /**
+ * The settings entry on the device's plugin management screen.
+ *
+ * Where a person actually goes to change how a plugin behaves: the list where
+ * it was installed and its permissions reviewed. A control inside the panel is
+ * both easy to miss and in the way -- the panel is opened from a lasso to do
+ * one thing and closed again.
+ */
+PluginManager.registerConfigButton();
+
+/**
  * Which button opened the panel, held at module scope.
  *
  * Every showType=1 button makes PluginHost open the plugin view, and the button
@@ -141,4 +151,42 @@ export const takePendingButton = () => {
   const id = pendingButtonId;
   pendingButtonId = null;
   return id;
+};
+
+/**
+ * Whether the panel was opened from the plugin management screen.
+ *
+ * Latched the same way a toolbar press is, and for the same reason: pressing
+ * the config button makes PluginHost open the plugin view, and the event can
+ * arrive before App.tsx has mounted to hear it.
+ */
+let configPending = false;
+let configSubscriber = null;
+
+PluginManager.registerConfigButtonListener({
+  onClick() {
+    log('config button pressed');
+    if (configSubscriber) {
+      configSubscriber();
+    } else {
+      configPending = true;
+    }
+  },
+});
+
+/** Subscribe to config presses that arrive while the panel is mounted. */
+export const onConfigPress = callback => {
+  configSubscriber = callback;
+  return () => {
+    if (configSubscriber === callback) {
+      configSubscriber = null;
+    }
+  };
+};
+
+/** Read and clear the pending config press. Call once, from App's mount effect. */
+export const takePendingConfig = () => {
+  const pressed = configPending;
+  configPending = false;
+  return pressed;
 };
