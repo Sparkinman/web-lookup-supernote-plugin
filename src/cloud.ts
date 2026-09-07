@@ -46,11 +46,23 @@ const DELETE_DIGEST = 'file/delete/summary';
 /** Where a digest came from, in Supernote's numbering. */
 export const SOURCE_DOCUMENT = 1;
 
+/**
+ * One request.
+ *
+ * `strict` decides what a `success: false` means. On the digest endpoints it is
+ * a failure and worth throwing on. On the sign-in endpoints it is not: logging
+ * in answers `success: false` with `errorCode` E1760 to say "this account wants
+ * an emailed code", which is the normal path and not an error at all. Throwing
+ * on it meant the code was never asked for, so no email was ever sent -- the
+ * reference this was taken from checks the flag in its digest service and
+ * deliberately does not in its sign-in.
+ */
 async function call(
   method: string,
   path: string,
   payload: object,
   token = '',
+  strict = true,
 ): Promise<Record<string, unknown>> {
   if (!native) {
     throw new Error('This build has no network module.');
@@ -82,7 +94,7 @@ async function call(
         key === 'token' && typeof value === 'string' ? `<${value.length} chars>` : value,
       ).slice(0, 700),
   );
-  if (body.success === false) {
+  if (strict && body.success === false) {
     const message = String(body.errorMsg ?? `Supernote refused ${path}.`);
     throw new Error(
       message === 'Server Error, please try again later'
@@ -116,10 +128,13 @@ export async function beginSignIn(
   password: string,
 ): Promise<{token?: string; validCodeKey?: string; timestamp?: unknown}> {
   const account = email.trim();
-  const challenge = await call('POST', 'official/user/query/random/code', {
-    countryCode: '1',
-    account,
-  });
+  const challenge = await call(
+    'POST',
+    'official/user/query/random/code',
+    {countryCode: '1', account},
+    '',
+    false,
+  );
   const randomCode = String(challenge.randomCode ?? '');
   const timestamp = challenge.timestamp;
   if (!randomCode) {
@@ -129,16 +144,22 @@ export async function beginSignIn(
   const md5 = await native!.hash('MD5', password);
   const digest = await native!.hash('SHA-256', md5 + randomCode);
 
-  const result = await call('POST', 'official/user/account/login/new', {
-    countryCode: 1,
-    account,
-    password: digest,
-    browser: 'Chrome107',
-    equipment: '1',
-    loginMethod: '1',
-    timestamp,
-    language: 'en',
-  });
+  const result = await call(
+    'POST',
+    'official/user/account/login/new',
+    {
+      countryCode: 1,
+      account,
+      password: digest,
+      browser: 'Chrome107',
+      equipment: '1',
+      loginMethod: '1',
+      timestamp,
+      language: 'en',
+    },
+    '',
+    false,
+  );
 
   const token = String(result.token ?? '');
   if (token) {
@@ -150,7 +171,7 @@ export async function beginSignIn(
   }
 
   // A code is wanted, and asking for one is signed.
-  const preAuth = await call('POST', 'user/validcode/pre-auth', {account});
+  const preAuth = await call('POST', 'user/validcode/pre-auth', {account}, '', false);
   const preToken = String(preAuth.token ?? '');
   const index = Number(preToken.slice(-1));
   const parts = preToken.split('-');
@@ -162,12 +183,13 @@ export async function beginSignIn(
   }
 
   const sign = await native!.hash('SHA-256', `${account}${realKey}`);
-  const sent = await call('POST', 'user/mail/validcode/send', {
-    email: account,
-    timestamp,
-    token: preToken,
-    sign,
-  });
+  const sent = await call(
+    'POST',
+    'user/mail/validcode/send',
+    {email: account, timestamp, token: preToken, sign},
+    '',
+    false,
+  );
   const validCodeKey = String(sent.validCodeKey ?? '');
   if (!validCodeKey) {
     throw new Error(String(sent.errorMsg ?? 'Supernote would not send a verification code.'));
@@ -189,14 +211,20 @@ export async function finishSignIn(
   validCodeKey: string,
   timestamp: unknown,
 ): Promise<string> {
-  const result = await call('POST', 'official/user/sms/login', {
-    email: email.trim(),
-    validCode: code.trim().toUpperCase(),
-    validCodeKey,
-    timestamp,
-    browser: 'Chrome107',
-    equipment: '4',
-  });
+  const result = await call(
+    'POST',
+    'official/user/sms/login',
+    {
+      email: email.trim(),
+      validCode: code.trim().toUpperCase(),
+      validCodeKey,
+      timestamp,
+      browser: 'Chrome107',
+      equipment: '4',
+    },
+    '',
+    false,
+  );
   const token = String(result.token ?? '');
   if (!token) {
     throw new Error(
