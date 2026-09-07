@@ -12,12 +12,14 @@
  * push the plugin's stale cached copy back over the write, which is what took
  * the page before that. Collapse/Expand says both, and does exactly this.
  *
- * Read a mark with `getElement`, not `getElements`. The page listing comes back
- * with `userData` stripped -- an icon written with sixty-eight characters of it
- * read back as MISSING, and every tap on it reported `userData=NONE`. Fetching
- * that one element by its own number returns the mark intact. Collapse/Expand
- * carries a probe for the same gap. Note the argument orders differ:
- * `getElements(page, path)` against `getElement(path, page, num)`.
+ * Nothing may be attached to an element. `userData` is declared in the SDK
+ * model and discarded by the firmware: an icon written with sixty-eight
+ * characters of it reads back carrying `uuid, type, layerNum, maxX, pageNum,
+ * thickness, maxY, recognizeResult, numInPage, textBox, status, contoursSrc,
+ * angles` and no `userData` at all -- set before the text box or after it,
+ * read by `getElements` or by `getElement`. So a clipping's words live in the
+ * plugin's own store and the icon is found by where it sits; a rectangle
+ * written at 454,1177 reads back at 454,1177. See `clippings.ts`.
  *
  * Round A established the rest. A finger tap at 1089,930 was reported inside a
  * text box at 974,926..1174,978, so motion coordinates and element rectangles
@@ -29,6 +31,7 @@
 import {PluginCommAPI, PluginFileAPI, PluginNoteAPI} from 'sn-plugin-lib';
 
 import type {Anchor, Rect} from './capture';
+import {addClipping, clippingAt, updateClipping} from './clippings';
 import {log} from './log';
 
 interface LooseResponse<T> {
@@ -94,49 +97,6 @@ async function flush(): Promise<boolean> {
   } catch (err) {
     log(`expandable: save threw — ${err instanceof Error ? err.message : String(err)}`);
     return false;
-  }
-}
-
-/**
- * The `userData` of one element, read the only way that returns it.
- *
- * `getElements` drops the field, so an element from that listing is asked for
- * again by number. Falls back to whatever the listing held, in case a firmware
- * elsewhere does the reverse.
- */
-async function markOf(
-  path: string,
-  page: number,
-  element: Record<string, unknown>,
-): Promise<string> {
-  const listed = typeof element.userData === 'string' ? element.userData : '';
-  if (listed) {
-    return listed;
-  }
-  const num = Number(element.numInPage);
-  if (!Number.isFinite(num)) {
-    return '';
-  }
-  try {
-    const response = (await PluginFileAPI.getElement(path, page, num)) as
-      | LooseResponse<Record<string, unknown>>
-      | null
-      | undefined;
-    if (!response?.success || response.result == null) {
-      // Says which of the two it was, so a blank mark is never ambiguous
-      // between "the read failed" and "the write did not keep it".
-      log(`expandable: getElement(#${num}) failed — ${response?.error?.message ?? 'no reason given'}`);
-      return '';
-    }
-    const fetched = response.result;
-    if (typeof fetched.userData === 'string' && fetched.userData) {
-      return fetched.userData;
-    }
-    log(`expandable: getElement(#${num}) returned no mark; it carries ${Object.keys(fetched).join(', ')}`);
-    return '';
-  } catch (err) {
-    log(`expandable: reading the mark of #${num} threw — ${err instanceof Error ? err.message : String(err)}`);
-    return '';
   }
 }
 
@@ -212,7 +172,8 @@ export async function placeIcon(
     textFrameStyle: 0,
     textEditable: 0,
   };
-  element.userData = `${ICON_MARK}${JSON.stringify({id, text})}`;
+  // Still set, in case a future firmware keeps it, but nothing depends on it.
+  element.userData = `${ICON_MARK}${JSON.stringify({id})}`;
   element.pageNum = page;
 
   let inserted = false;
@@ -228,7 +189,6 @@ export async function placeIcon(
       return why;
     }
     log(`expandable: inserted icon ${id} at ${left},${top} carrying ${text.length} characters`);
-    log(`expandable: sent userData of ${String(element.userData).length} chars`);
   } catch (err) {
     const why = err instanceof Error ? err.message : 'an unknown error';
     log(`expandable: insert threw — ${why}`);
@@ -242,6 +202,10 @@ export async function placeIcon(
       // Nothing useful to do about it.
     }
   }
+
+  // The words go to our own store, keyed by where the icon sits. The element
+  // cannot carry them: `userData` is discarded by the firmware.
+  await addClipping({id, path, page, rect, text});
 
   // The save happened before the write, never here: saving now would push the
   // plugin's stale cached page back over the element just inserted.
@@ -261,10 +225,8 @@ export async function placeIcon(
         return b?.textRect?.left === left && b?.textRect?.top === top;
       })
     : undefined;
-  const kept = mine ? await markOf(path, page, mine) : '';
   log(
-    `expandable: read back — ${mine ? `found at ${left},${top}` : 'NOT FOUND'}, ` +
-      `userData ${kept ? `${kept.length} chars` : 'MISSING'}`,
+    `expandable: read back — ${mine ? `found at ${left},${top}, which is how it will be found again` : 'NOT FOUND'}`,
   );
 
   const after = await census(path, page, 'after');
@@ -296,71 +258,17 @@ export async function tapped(x: number, y: number): Promise<void> {
     return;
   }
 
-  const elements = unwrap<Record<string, unknown>[]>(await PluginFileAPI.getElements(page, path));
-  if (!Array.isArray(elements)) {
-    log('tap: the page could not be read');
-    return;
-  }
-
-  // Only what the tap actually landed on is asked about. The mark comes from a
-  // second read per candidate, because the page listing above returns none --
-  // and candidates are nearly always none or one, so this costs nothing on the
-  // overwhelming majority of taps, which hit no icon at all.
-  const under = elements.filter(element => {
-    const r = (element.textBox as {textRect?: Rect} | undefined)?.textRect;
-    return (
-      r != null &&
-      x >= r.left - HIT_PAD &&
-      x <= r.right + HIT_PAD &&
-      y >= r.top - HIT_PAD &&
-      y <= r.bottom + HIT_PAD
-    );
-  });
-
-  let icon: Record<string, unknown> | undefined;
-  let mark = '';
-  for (const element of under) {
-    const data = await markOf(path, page, element);
-    const label = String(
-      (element.textBox as {textContentFull?: string} | undefined)?.textContentFull ?? '',
-    ).slice(0, 20);
-    log(
-      `tap: over #${String(element.numInPage)} "${label}" ` +
-        `userData=${data ? `${data.length} chars starting "${data.slice(0, 24)}"` : 'NONE'}`,
-    );
-    if (!icon && data.startsWith(ICON_MARK)) {
-      icon = element;
-      mark = data;
-    }
-  }
-  if (!icon) {
+  // Identification happens entirely in our own store: no page read, nothing
+  // asked of the element, and so nothing that depends on a field the firmware
+  // throws away. A tap that hits no clipping costs one small file read.
+  const clipping = await clippingAt(path, page, x, y);
+  if (!clipping) {
     log('tap: nothing of ours under it');
     return;
   }
+  log(`tap: on ${clipping.id}, currently ${clipping.openRect ? 'open' : 'shut'}`);
 
-  let carried: {id: string; text: string};
-  try {
-    carried = JSON.parse(mark.slice(ICON_MARK.length));
-  } catch {
-    log('expandable: an icon of ours carries something unreadable');
-    return;
-  }
-
-  // Is this one already open? Only text elements can be the opened text, and a
-  // page holds a handful of those, so each is asked for its mark.
-  const openMark = `${OPEN_MARK}${carried.id}`;
-  let open: Record<string, unknown> | undefined;
-  for (const element of elements) {
-    if (Number(element.type) !== TYPE_TEXT || element === icon) {
-      continue;
-    }
-    if ((await markOf(path, page, element)) === openMark) {
-      open = element;
-      break;
-    }
-  }
-
-  const before = await census(path, page, `tap on ${carried.id}: before`);
+  const before = await census(path, page, `tap on ${clipping.id}: before`);
 
   // Same rule as placing one: commit the user's ink before touching the file.
   if (!(await flush())) {
@@ -368,24 +276,10 @@ export async function tapped(x: number, y: number): Promise<void> {
     return;
   }
 
-  if (open) {
-    // The number is taken from this read rather than remembered: numbering has
-    // gaps and a stale one would delete something else.
-    const num = Number(open.numInPage);
-    log(`expandable: shutting ${carried.id}, deleting element ${num}`);
-    try {
-      const response = (await PluginFileAPI.deleteElements(path, page, [num])) as
-        | LooseResponse<boolean>
-        | null
-        | undefined;
-      if (!response?.success) {
-        log(`expandable: delete refused — ${response?.error?.message ?? 'no reason given'}`);
-      }
-    } catch (err) {
-      log(`expandable: delete threw — ${err instanceof Error ? err.message : String(err)}`);
-    }
+  if (clipping.openRect) {
+    await shut(path, page, clipping.id, clipping.openRect);
   } else {
-    await draw(path, page, icon, carried);
+    await draw(path, page, clipping.id, clipping.rect, clipping.text);
   }
 
   try {
@@ -393,35 +287,82 @@ export async function tapped(x: number, y: number): Promise<void> {
   } catch (err) {
     log(`expandable: reloadFile threw — ${err instanceof Error ? err.message : String(err)}`);
   }
-  const after = await census(path, page, `tap on ${carried.id}: after`);
+  const after = await census(path, page, `tap on ${clipping.id}: after`);
   if (before > 0 && after >= 0 && Math.abs(after - before) > 1) {
     log(`expandable: WARNING the page went from ${before} to ${after} on one tap`);
   }
 }
 
-/** Write the carried words onto the page, just below their icon. */
+/**
+ * Take the opened text back off the page.
+ *
+ * The element is found by the rectangle it was written at, for the same reason
+ * the icon is: it is the one thing about our elements that survives. The number
+ * is read from the page at this moment rather than remembered, because
+ * numbering has gaps and is reused -- a remembered one would delete a stroke.
+ */
+async function shut(path: string, page: number, id: string, openRect: Rect): Promise<void> {
+  const elements = unwrap<Record<string, unknown>[]>(await PluginFileAPI.getElements(page, path));
+  const open = Array.isArray(elements)
+    ? elements.find(element => {
+        const r = (element.textBox as {textRect?: Rect} | undefined)?.textRect;
+        return (
+          Number(element.type) === TYPE_TEXT &&
+          r != null &&
+          Math.abs(r.left - openRect.left) <= 2 &&
+          Math.abs(r.top - openRect.top) <= 2
+        );
+      })
+    : undefined;
+
+  if (!open) {
+    // The user deleted it by hand. Shut is still the right outcome.
+    log(`expandable: nothing open at ${openRect.left},${openRect.top} — marking ${id} shut`);
+    await updateClipping(id, {openRect: undefined});
+    return;
+  }
+
+  const num = Number(open.numInPage);
+  log(`expandable: shutting ${id}, deleting element ${num}`);
+  try {
+    const response = (await PluginFileAPI.deleteElements(path, page, [num])) as
+      | LooseResponse<boolean>
+      | null
+      | undefined;
+    if (!response?.success) {
+      log(`expandable: delete refused — ${response?.error?.message ?? 'no reason given'}`);
+      return;
+    }
+  } catch (err) {
+    log(`expandable: delete threw — ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
+  await updateClipping(id, {openRect: undefined});
+}
+/**
+ * Write the kept words onto the page, just below their icon.
+ *
+ * Where it lands is recorded, because that rectangle is how the text is found
+ * again when the icon is tapped a second time to shut it.
+ */
 async function draw(
   path: string,
   page: number,
-  icon: Record<string, unknown>,
-  carried: {id: string; text: string},
+  id: string,
+  iconRect: Rect,
+  text: string,
 ): Promise<void> {
-  const box = icon.textBox as {textRect?: Rect} | undefined;
-  const rect = box?.textRect;
-  if (!rect) {
-    return;
-  }
   const size = unwrap<{width: number; height: number}>(await PluginFileAPI.getPageSize(path, page));
   const width = size?.width ?? 1920;
   const height = size?.height ?? 2560;
 
-  const left = Math.min(rect.left, width - MARGIN - 400);
+  const left = Math.min(iconRect.left, width - MARGIN - 400);
   const right = width - MARGIN;
-  const top = rect.bottom + GAP;
+  const top = iconRect.bottom + GAP;
   // No text metrics are reported, so the height is estimated from an average
   // character width. Too tall costs nothing, where too short clips the tail.
   const perLine = Math.max(10, Math.floor((right - left) / (TEXT_FONT * 0.5)));
-  const lines = carried.text
+  const lines = text
     .split('\n')
     .reduce((total, line) => total + Math.max(1, Math.ceil(line.length / perLine)), 0);
   const bottom = Math.min(height - MARGIN, top + Math.round(lines * TEXT_FONT * 1.5) + TEXT_FONT);
@@ -429,16 +370,16 @@ async function draw(
     log('expandable: no room below the icon to open it');
     return;
   }
+  const openRect: Rect = {left, top, right, bottom};
 
   const element = unwrap<Record<string, unknown>>(await PluginCommAPI.createElement(TYPE_TEXT));
   if (!element) {
     return;
   }
-  // Box first, mark second -- see placeIcon.
   element.textBox = {
     fontSize: TEXT_FONT,
-    textContentFull: carried.text,
-    textRect: {left, top, right, bottom},
+    textContentFull: text,
+    textRect: openRect,
     textAlign: 0,
     textBold: 0,
     textItalics: 0,
@@ -446,7 +387,7 @@ async function draw(
     textFrameStyle: 0,
     textEditable: 0,
   };
-  element.userData = `${OPEN_MARK}${carried.id}`;
+  element.userData = `${OPEN_MARK}${id}`;
   element.pageNum = page;
 
   try {
@@ -454,13 +395,14 @@ async function draw(
       | LooseResponse<boolean>
       | null
       | undefined;
-    log(
-      response?.success
-        ? `expandable: opened ${carried.id}`
-        : `expandable: opening refused — ${response?.error?.message ?? 'no reason given'}`,
-    );
+    if (!response?.success) {
+      log(`expandable: opening refused — ${response?.error?.message ?? 'no reason given'}`);
+      return;
+    }
+    log(`expandable: opened ${id} at ${left},${top}..${right},${bottom}`);
   } catch (err) {
     log(`expandable: opening threw — ${err instanceof Error ? err.message : String(err)}`);
+    return;
   } finally {
     try {
       (element as {recycle?: () => Promise<void>}).recycle?.();
@@ -468,4 +410,8 @@ async function draw(
       // Nothing useful to do about it.
     }
   }
+
+  // Recorded only after the write succeeded, so a failed open leaves the
+  // clipping shut rather than pointing at text that is not there.
+  await updateClipping(id, {openRect});
 }

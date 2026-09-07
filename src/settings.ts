@@ -247,7 +247,23 @@ export async function saveSettings(settings: Settings): Promise<void> {
     return;
   }
   try {
-    await native.write(JSON.stringify(settings, null, 2));
+    // The clippings share this blob and are not part of Settings, so they are
+    // carried across from whatever is on disk right now. Writing the settings
+    // object alone would delete every kept clipping the moment anyone opened
+    // the settings screen.
+    let kept: unknown;
+    try {
+      const raw = await native.read();
+      const parsed = raw ? (JSON.parse(raw) as Record<string, unknown>) : null;
+      kept = parsed?.clippings;
+    } catch {
+      // A blob that cannot be read has nothing worth preserving in it.
+    }
+    const payload: Record<string, unknown> = {...settings};
+    if (Array.isArray(kept)) {
+      payload.clippings = kept;
+    }
+    await native.write(JSON.stringify(payload, null, 2));
   } catch (err) {
     log(`settings: could not save (${err instanceof Error ? err.message : String(err)})`);
   }
