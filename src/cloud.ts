@@ -340,6 +340,17 @@ export async function testRoundTrip(
     }
     log(`cloud: READ BACK ${JSON.stringify(mine)}`);
 
+    // One the device made itself, for comparison. Ours round-trips its fields,
+    // but whether the tablet will actually offer the jump back may depend on
+    // something only it sets -- fileId is null on ours and is the obvious
+    // candidate. Field-for-field against a real one is how that gets settled.
+    const theirs = rows.find(row => String(row.id) !== id && !String(row.content ?? '').startsWith('Web Lookup round-trip'));
+    if (theirs) {
+      log(`cloud: A REAL DIGEST FOR COMPARISON ${JSON.stringify(theirs)}`);
+    } else {
+      log('cloud: no digest made by the device to compare against');
+    }
+
     const keptPath = String(mine.sourcePath ?? '');
     const keptType = mine.sourceType;
     const metadata = String(mine.metadata ?? '');
@@ -359,4 +370,32 @@ export async function testRoundTrip(
       }
     }
   }
+}
+
+
+/**
+ * Write a passage into the device's own Digest.
+ *
+ * The source fields are sent because they survive: a round trip confirmed that
+ * `sourcePath`, `sourceType` and the page inside `document_location_data` all
+ * come back exactly as they were sent, so a digest made here can name the book
+ * and page it came from rather than arriving as an orphan paragraph.
+ */
+export async function addBookDigest(
+  token: string,
+  passage: string,
+  bookPath: string,
+  page: number,
+  reference: string,
+  urls: string[],
+): Promise<string> {
+  // The passage first, since that is what a person reads in the digest list;
+  // where it came from underneath it.
+  const content = [passage.trim(), reference, ...urls].filter(Boolean).join('\n\n');
+  return createDigest(token, {
+    content,
+    sourcePath: bookPath,
+    sourceType: SOURCE_DOCUMENT,
+    page,
+  });
 }

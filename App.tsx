@@ -53,6 +53,7 @@ import {
   saveSettings,
   type Settings,
 } from './src/settings';
+import {addBookDigest} from './src/cloud';
 import {probeBook, probeClosedBook, probePage} from './src/digestprobe';
 import {SettingsScreen} from './src/Settings';
 import {get, openExternally, WEB_AVAILABLE} from './src/web';
@@ -439,16 +440,30 @@ export default function App(): React.JSX.Element {
           reference: reference(anchor),
           urls: chosenUrls(),
         });
-      } else {
-        // Nothing is kept from a book yet, and nothing is invented in place of
-        // it. These excerpts belong in the device's own Digest, and the SDK
-        // exposes no call that makes the firmware take one -- only the element
-        // vocabulary for writing a digest text box into a note, which needs the
-        // real `textDigestData` format before it would be a digest rather than
-        // something merely shaped like one. Collecting them into a note of our
-        // own was the wrong answer to that, so it is not done.
+      } else if (!settings.cloudToken) {
+        // A book's own markup is unreachable: locked (1206) while the book is
+        // open, forbidden (102) once it is closed. The device's own Digest is
+        // where these belong, and Supernote's service is the only way in.
         failure =
-          'nothing can be kept from a book yet — the device will not let a plugin write while a book is open';
+          'sign in to Supernote Cloud in Settings, and this will go into your Digest';
+      } else {
+        try {
+          const id = await addBookDigest(
+            settings.cloudToken,
+            text,
+            anchor.source.path,
+            anchor.source.page,
+            reference(anchor),
+            chosenUrls(),
+          );
+          log(`digest: created ${id} from ${anchor.fileName}`);
+          setPicked([]);
+          setStatus('Added to your Digest.');
+          finish();
+          return;
+        } catch (err) {
+          failure = err instanceof Error ? err.message : 'Supernote would not take that.';
+        }
       }
       if (failure) {
         log(`insert failed: ${failure}`);
@@ -461,7 +476,7 @@ export default function App(): React.JSX.Element {
     } finally {
       setBusy(false);
     }
-  }, [anchor, chosenUrls, finish, page, picked]);
+  }, [anchor, chosenUrls, finish, page, picked, settings]);
 
   /**
    * Draw the chosen passages as an image and hang it off the handwriting.
@@ -717,7 +732,7 @@ export default function App(): React.JSX.Element {
           {picked.length > 0 && anchor && (
             <TouchableOpacity style={styles.insert} onPress={insert} disabled={busy}>
               <Text style={styles.insertText}>
-                {anchor.isNote ? 'Paste selected text' : 'Add to digest'}
+                {anchor.isNote ? 'Paste selected text' : 'Add to Digest'}
               </Text>
 
             </TouchableOpacity>
