@@ -53,7 +53,7 @@ import {
   saveSettings,
   type Settings,
 } from './src/settings';
-import {probePage} from './src/digestprobe';
+import {probeBook, probePage} from './src/digestprobe';
 import {SettingsScreen} from './src/Settings';
 import {get, openExternally, WEB_AVAILABLE} from './src/web';
 import {
@@ -237,11 +237,13 @@ export default function App(): React.JSX.Element {
             `anchor: ${captured.fileName} page ${captured.source.page} ` +
               `note=${captured.isNote} rect=${JSON.stringify(captured.rect)}`,
           );
+          // Reads, changes nothing. A digest taken from a book belongs to the
+          // document rather than to any note, so a book is asked about its own
+          // markup and a note about its page.
           if (captured.isNote) {
-            // Reads the page, changes nothing. This is how the firmware's own
-            // digest format gets read back off a real example: put a digest on
-            // the page and lasso anything on it.
             void probePage(captured.source.path, captured.source.page);
+          } else {
+            void probeBook(captured.source.path, captured.source.page);
           }
         } catch (err) {
           log(`anchor: unavailable (${err instanceof Error ? err.message : String(err)})`);

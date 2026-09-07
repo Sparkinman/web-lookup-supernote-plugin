@@ -60,6 +60,16 @@ function fromBase64(input: string): string | null {
   return out;
 }
 
+/** Log one API answer whole, error included, without deciding what it means. */
+function report(label: string, response: unknown): void {
+  const parsed = response as LooseResponse<unknown> | null | undefined;
+  if (parsed?.success) {
+    log(`probe: ${label} ok ${JSON.stringify(parsed.result).slice(0, 1200)}`);
+  } else {
+    log(`probe: ${label} refused ${JSON.stringify(parsed?.error ?? parsed ?? null)}`);
+  }
+}
+
 /** Log a digest payload every way it might be readable. */
 function describe(label: string, raw: string): void {
   log(`${label} RAW: ${raw}`);
@@ -136,5 +146,75 @@ export async function probePage(notePath: string, page: number): Promise<void> {
     }
   } catch (err) {
     log(`probe: threw — ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+
+/**
+ * Look for a book's own markup, which is where a digest taken from a book lives.
+ *
+ * A digest dragged out of a PDF is not an element of any note -- it belongs to
+ * the document, and Supernote keeps a document's annotations in a mark file
+ * beside it. So the note-side probe was looking in a place these could never
+ * be. This asks the document instead.
+ *
+ * Every answer is logged whole, refusals included, because the second question
+ * here is whether these calls are gated on the foreground app the way the
+ * note-side ones are. If they are, a book's own markup is out of reach too and
+ * the local route is finished; if they are not, the format is right there.
+ */
+export async function probeBook(bookPath: string, page: number): Promise<void> {
+  log(`probe: looking at the book ${bookPath} page ${page}`);
+
+  try {
+    report('getMarkPages', await PluginFileAPI.getMarkPages(bookPath));
+  } catch (err) {
+    log(`probe: getMarkPages threw — ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  // The mark file sits beside the document under the same name. Both spellings
+  // are tried because which one these calls want is not documented.
+  const markPath = `${bookPath}.mark`;
+  try {
+    report('getMarkPages(.mark)', await PluginFileAPI.getMarkPages(markPath));
+  } catch (err) {
+    log(`probe: getMarkPages(.mark) threw — ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  for (const [label, path] of [
+    ['book', bookPath],
+    ['mark', markPath],
+  ] as const) {
+    try {
+      const response = (await PluginFileAPI.getElements(page, path)) as
+        | LooseResponse<Record<string, unknown>[]>
+        | null
+        | undefined;
+      if (!response?.success || !Array.isArray(response.result)) {
+        log(`probe: getElements(${label}) refused ${JSON.stringify(response?.error ?? null)}`);
+        continue;
+      }
+      const elements = response.result;
+      log(
+        `probe: getElements(${label}) returned ${elements.length}, ` +
+          `types [${elements.map(e => e?.type).join(',')}]`,
+      );
+      for (const element of elements) {
+        const box = element?.textBox as Record<string, unknown> | undefined;
+        const data = typeof box?.textDigestData === 'string' ? box.textDigestData : '';
+        if (data) {
+          log(`probe: DIGEST BOX (${label}) ${JSON.stringify(box).slice(0, 800)}`);
+          describe(`probe: DIGEST DATA (${label})`, data);
+        }
+      }
+    } catch (err) {
+      log(`probe: getElements(${label}) threw — ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  try {
+    report('getElementCounts', await PluginFileAPI.getElementCounts(bookPath, page));
+  } catch (err) {
+    log(`probe: getElementCounts threw — ${err instanceof Error ? err.message : String(err)}`);
   }
 }
