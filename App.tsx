@@ -39,7 +39,6 @@ import {
 import {
   attachClip,
   attachScreenshot,
-  capturePage,
   CLIP_AVAILABLE,
   insertPassages,
   type ClipSection,
@@ -123,6 +122,15 @@ export default function App(): React.JSX.Element {
   const noteTouched = useRef(false);
   /** The highlight drift is measured once a run; it does not change. */
   const calibrated = useRef(false);
+  /**
+   * Where each passage sits in the list, and what part of the list is shown.
+   *
+   * React Native will not say which children are visible, but each one reports
+   * its own position when it is laid out and the list reports how far it has
+   * been scrolled and how tall it is, which is the same answer by arithmetic.
+   */
+  const blockAt = useRef<Map<number, {y: number; height: number}>>(new Map());
+  const viewport = useRef({scrollY: 0, height: 0});
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [showSettings, setShowSettings] = useState(false);
   /** The part of the panel a screenshot photographs: the reader, not the chrome. */
@@ -220,6 +228,9 @@ export default function App(): React.JSX.Element {
       // middle. `animated: false` because this is e-ink: a smooth scroll is a
       // sequence of full-screen repaints.
       scrollRef.current?.scrollTo({y: 0, animated: false});
+      // The old measurements describe a page that is no longer there.
+      blockAt.current.clear();
+      viewport.current.scrollY = 0;
       if (parsed.blocks.length === 0) {
         setStatus('Nothing readable on that page. Try opening it in the viewer.');
       }
@@ -403,6 +414,33 @@ export default function App(): React.JSX.Element {
    * Shared by the draft and by what is written, so what is saved is what was
    * read on screen rather than a second composition of the same thing.
    */
+  /**
+   * The passages currently on screen, top to bottom.
+   *
+   * A passage counts as on screen when any part of it is, so one half scrolled
+   * past is kept rather than dropped -- the alternative loses exactly the line
+   * somebody was reading when they pressed the button.
+   */
+  const visibleText = useCallback((): string => {
+    if (!page) {
+      return '';
+    }
+    const {scrollY, height} = viewport.current;
+    const bottom = scrollY + height;
+    const shown: number[] = [];
+    for (let i = 0; i < page.blocks.length; i += 1) {
+      const box = blockAt.current.get(i);
+      if (box && box.y < bottom && box.y + box.height > scrollY) {
+        shown.push(i);
+      }
+    }
+    log(`capture: ${shown.length} of ${page.blocks.length} passages are on screen`);
+    return shown
+      .map(i => blockText(page.blocks[i]))
+      .filter(Boolean)
+      .join('\n\n');
+  }, [page]);
+
   const chosenText = useCallback((): string => {
     if (!page) {
       return '';
@@ -644,27 +682,19 @@ export default function App(): React.JSX.Element {
       return;
     }
 
-    // From a book there is nothing to hang a link on, so the picture is simply
-    // kept and its path named in the note. What is captured is what is on
-    // screen: the reader draws the page's text and never its images, so a
-    // picture in the original article is not in the capture either -- there is
-    // nothing on screen for it to be.
+    // From a book, the words rather than a picture of them. A digest holds
+    // text and cannot hold a screenshot, so what is on screen is read out, put
+    // in front of the reader to cut down, and saved into the typed section.
     if (!anchor?.isNote) {
-      setBusy(true);
-      setStatus('Capturing…');
-      try {
-        const drawn = await capturePage(tag, settings.clipFolder);
-        if (!drawn) {
-          setStatus('The page could not be captured.');
-          return;
-        }
-        log(`capture: ${drawn.path} (${drawn.width}x${drawn.height})`);
-        noteTouched.current = true;
-        setNote(current => `${current}${current ? '\n\n' : ''}Picture: ${drawn.path}`);
-        setStatus('Captured — its path is in the text.');
-      } finally {
-        setBusy(false);
+      const shown = visibleText();
+      if (!shown) {
+        setStatus('Nothing on screen to capture yet.');
+        return;
       }
+      noteTouched.current = true;
+      setNote(current => (current ? `${current}\n\n${shown}` : shown));
+      setEditingNote(true);
+      setStatus('Captured what is on screen — trim it, then add it to your Digest.');
       return;
     }
 
@@ -694,7 +724,7 @@ export default function App(): React.JSX.Element {
     } finally {
       setBusy(false);
     }
-  }, [anchor, chosenUrls, finish, settings]);
+  }, [anchor, chosenUrls, finish, settings, visibleText]);
 
   const handOff = useCallback(async () => {
     // Wikipedia is read through its API, so what was fetched is not what a
@@ -800,16 +830,62 @@ export default function App(): React.JSX.Element {
         </Text>
       ) : null}
 
-      <View style={styles.body} ref={readerRef} collapsable={false}>
+      {editingNote ? (
+        // In place of the reader rather than below it. The on-screen keyboard
+        // takes the bottom half of the display, and an editor sitting above the
+        // footer is precisely what it covers -- so it goes where the reading
+        // was, at the top, where nothing can be over it.
+        <View style={styles.editor}>
+          <View style={styles.editorHead}>
+            <Text style={styles.noteLabel}>Trim this to the part worth keeping</Text>
+            <View style={styles.spacer} />
+            <TouchableOpacity
+              style={styles.btn}
+              onPress={() => {
+                noteTouched.current = false;
+                setNote(chosenText());
+              }}>
+              <Text style={styles.btnText}>Reset</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.btn} onPress={() => setEditingNote(false)}>
+              <Text style={styles.btnText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+          <TextInput
+            style={styles.noteInput}
+            value={note}
+            onChangeText={value => {
+              noteTouched.current = true;
+              setNote(value);
+            }}
+            multiline
+            autoFocus
+            autoCorrect={false}
+          />
+        </View>
+      ) : null}
+
+      <View
+        style={[styles.body, editingNote && styles.hidden]}
+        ref={readerRef}
+        collapsable={false}>
         {page && page.blocks.length > 0 ? (
           <ScrollView
             ref={scrollRef}
             style={styles.scroll}
-            contentContainerStyle={styles.scrollInner}>
+            contentContainerStyle={styles.scrollInner}
+            scrollEventThrottle={100}
+            onScroll={event => {
+              viewport.current.scrollY = event.nativeEvent.contentOffset.y;
+            }}
+            onLayout={event => {
+              viewport.current.height = event.nativeEvent.layout.height;
+            }}>
             {page.blocks.map((block, index) => (
               <Passage
                 key={`${index}-${block.text.slice(0, 24)}`}
                 block={block}
+                onMeasured={(y, height) => blockAt.current.set(index, {y, height})}
                 picked={picked.includes(index)}
                 onPick={() => toggle(index)}
                 onFollow={block.href ? () => follow(block.href!) : undefined}
@@ -832,36 +908,6 @@ export default function App(): React.JSX.Element {
 
       {page && page.blocks.length > 0 && (
         <>
-        {editingNote ? (
-          <View style={styles.noteBox}>
-            <Text style={styles.noteLabel}>
-              What will be kept — trim it to the part you want
-            </Text>
-            <TextInput
-              style={styles.noteInput}
-              value={note}
-              onChangeText={value => {
-                noteTouched.current = true;
-                setNote(value);
-              }}
-              multiline
-              autoCorrect={false}
-            />
-            <View style={styles.footerButtons}>
-              <TouchableOpacity
-                style={styles.btn}
-                onPress={() => {
-                  noteTouched.current = false;
-                  setNote(chosenText());
-                }}>
-                <Text style={styles.btnText}>Reset</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.btn} onPress={() => setEditingNote(false)}>
-                <Text style={styles.btnText}>Done</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        ) : null}
         <View style={styles.footer}>
           {/* On its own line above the buttons. Sharing a row with them, a long
               message -- and a refusal is always long -- pushed every button off
@@ -902,7 +948,7 @@ export default function App(): React.JSX.Element {
               onPress={screenshot}
               disabled={busy}>
               <Text style={styles.insertText}>
-                {anchor?.isNote ? 'Screenshot' : 'Capture page'}
+                {anchor?.isNote ? 'Screenshot' : 'Capture text'}
               </Text>
             </TouchableOpacity>
           )}
@@ -942,14 +988,21 @@ function Passage({
   picked,
   onPick,
   onFollow,
+  onMeasured,
 }: {
   block: Block;
   picked: boolean;
   onPick(): void;
   onFollow?: () => void;
+  /** Where this passage ended up, so "what is on screen" can be worked out. */
+  onMeasured?: (y: number, height: number) => void;
 }): React.JSX.Element {
   return (
-    <View style={[styles.block, picked && styles.blockPicked]}>
+    <View
+      style={[styles.block, picked && styles.blockPicked]}
+      onLayout={event =>
+        onMeasured?.(event.nativeEvent.layout.y, event.nativeEvent.layout.height)
+      }>
       <TouchableOpacity style={styles.blockText} onPress={onPick} activeOpacity={0.6}>
         <Text
           style={[
@@ -1119,7 +1172,11 @@ const styles = StyleSheet.create({
   },
   footerButtons: {flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', marginTop: 6},
   // Tall enough to work in, bounded so the reader behind it is still visible.
-  noteBox: {borderTopWidth: 2, borderTopColor: '#000', paddingHorizontal: 12, paddingVertical: 8},
+  editor: {flex: 1, paddingHorizontal: 12, paddingVertical: 8},
+  editorHead: {flexDirection: 'row', alignItems: 'center', marginBottom: 6},
+  // Kept mounted rather than unmounted: the reader holds the scroll position
+  // and every passage's measurements, and rebuilding it would lose both.
+  hidden: {height: 0, opacity: 0},
   noteLabel: {fontSize: 15, color: '#000', marginBottom: 6},
   noteInput: {
     borderWidth: 2,
@@ -1128,8 +1185,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     fontSize: 16,
     color: '#000',
-    minHeight: 120,
-    maxHeight: 320,
+    flex: 1,
     textAlignVertical: 'top',
   },
   footer: {
