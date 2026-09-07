@@ -109,6 +109,15 @@ export default function App(): React.JSX.Element {
    */
   const [hideLinks, setHideLinks] = useState(false);
   /**
+   * Which refinement words are switched on.
+   *
+   * Held apart from the query rather than written into it. Pressing one used to
+   * push a word onto the search, so pressing a second gave "meaning explained
+   * …" with no way back except deleting it by hand -- and no sign, once
+   * pressed, of which had been used.
+   */
+  const [refining, setRefining] = useState<string[]>([]);
+  /**
    * Reading the page as one piece of text, so it can be selected.
    *
    * React Native reports a selection in a text field and nowhere else, which is
@@ -280,6 +289,12 @@ export default function App(): React.JSX.Element {
     }
   }, []);
 
+  /** The search as it will actually be sent: the words in front of the passage. */
+  const asked = useCallback(
+    (base: string, words: string[]) => [...words, base.trim()].filter(Boolean).join(' '),
+    [],
+  );
+
   const search = useCallback(
     async (text: string, withLens: Lens) => {
       const trimmed = text.trim();
@@ -334,6 +349,7 @@ export default function App(): React.JSX.Element {
       setStatus(null);
       setNote('');
       setEditingNote(false);
+      setRefining([]);
       noteTouched.current = false;
 
       if (buttonId === TOOLBAR_BUTTON) {
@@ -1034,13 +1050,18 @@ export default function App(): React.JSX.Element {
             style={styles.input}
             value={query}
             onChangeText={setQuery}
-            onSubmitEditing={() => search(query, lensRef.current)}
+              onSubmitEditing={() => search(asked(query, refining), lensRef.current)}
             placeholder="Search, or type an address"
             returnKeyType="search"
             autoCorrect={false}
           />
           {query.length > 0 ? (
-            <TouchableOpacity style={styles.clear} onPress={() => setQuery('')}>
+            <TouchableOpacity
+              style={styles.clear}
+              onPress={() => {
+                setQuery('');
+                setRefining([]);
+              }}>
               <Text style={styles.clearText}>✕</Text>
             </TouchableOpacity>
           ) : null}
@@ -1076,7 +1097,7 @@ export default function App(): React.JSX.Element {
             style={[styles.lens, l.id === lens.id && styles.lensOn]}
             onPress={() => {
               chooseLens(l);
-              search(query, l);
+              void search(asked(query, refining), l);
             }}>
             <Text style={[styles.lensText, l.id === lens.id && styles.lensTextOn]}>
               {l.label}
@@ -1128,21 +1149,22 @@ export default function App(): React.JSX.Element {
           {settings.refinements.map(word => (
             <TouchableOpacity
               key={word}
-              style={styles.refineBtn}
+              style={[styles.refineBtn, refining.includes(word) && styles.refineBtnOn]}
               onPress={() => {
-                // In front of the passage rather than after it. A search that
-                // ends in "commentary" is a long quotation with a word stuck on
-                // the end; one that begins with it reads as the question being
-                // asked, which is what the leading terms of a query are
-                // weighted as. Added once only -- pressing the same word twice
-                // should not search for it twice.
-                const current = query.trim();
-                const already = current.toLowerCase().startsWith(word.toLowerCase());
-                const asked = already ? current : `${word} ${current}`;
-                setQuery(asked);
-                void search(asked, lensRef.current);
+                // A switch, not an addition. In front of the passage because a
+                // search ending in "commentary" is a quotation with a word
+                // stuck on it, where one beginning with it reads as the
+                // question being asked.
+                const on = refining.includes(word);
+                const next = on ? refining.filter(w => w !== word) : [...refining, word];
+                setRefining(next);
+                void search(asked(query, next), lensRef.current);
               }}>
-              <Text style={styles.refineText}>+ {word}</Text>
+              <Text
+                style={[styles.refineText, refining.includes(word) && styles.refineTextOn]}>
+                {refining.includes(word) ? '✓ ' : '+ '}
+                {word}
+              </Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
@@ -1512,6 +1534,8 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   refineText: {fontSize: 16, color: '#000', fontWeight: '600'},
+  refineBtnOn: {backgroundColor: '#000'},
+  refineTextOn: {color: '#fff'},
   hint: {paddingHorizontal: 12, paddingVertical: 6, fontSize: 13, color: '#000'},
   reference: {paddingHorizontal: 12, paddingBottom: 4, fontSize: 12, color: '#000'},
   body: {flex: 1},
