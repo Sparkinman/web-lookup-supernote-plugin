@@ -10,12 +10,19 @@ import java.io.File
 import java.security.MessageDigest
 
 /**
- * Keeps the user's preferences between runs.
+ * Keeps the user's preferences between runs, where only the plugin can see them.
  *
- * Written to Document/LookUp/ rather than the plugin's private directory: that
- * directory is wiped when a plugin is updated or reinstalled, which on this
- * device happens every time a new build is sideloaded. Settings that vanish on
- * each update are worse than no settings at all.
+ * These used to be a JSON file in Document/LookUp, which anyone could read off
+ * the device over USB. That was tolerable while the settings were a folder name
+ * and a label; it stopped being so once they held a Supernote session token,
+ * which is as good as the account for as long as it lasts.
+ *
+ * Preferences rather than a private file. The plugin's own directory is wiped
+ * whenever a plugin is updated, which on this device is every sideloaded build,
+ * so settings kept there would not survive one -- and signing in again after
+ * every install is exactly what a stored session is meant to avoid. This code
+ * runs inside PluginHost's process, so these belong to PluginHost and outlive
+ * the plugin's own directory, while still being invisible outside the device.
  *
  * sn-plugin-lib has no general file I/O — PluginFileAPI is note-specific — so
  * this exists for what looks like it should be one SDK call.
@@ -25,19 +32,45 @@ class SettingsModule(reactContext: ReactApplicationContext) :
 
   override fun getName() = "LookUpSettings"
 
-  private fun file(): File =
+  private fun prefs() = reactApplicationContext.getSharedPreferences(PREFS, 0)
+
+  /** The old plaintext file, kept only to be read once and emptied. */
+  private fun legacyFile(): File =
       File(File(Environment.getExternalStorageDirectory(), DIR), FILE)
 
   /** Resolves the stored JSON, or null when nothing has been saved yet. */
   @ReactMethod
   fun read(promise: Promise) {
     try {
-      val file = file()
-      if (!file.exists() || !file.canRead()) {
+      val stored = prefs().getString(KEY, null)
+      if (stored != null) {
+        promise.resolve(stored)
+        return
+      }
+
+      // Nothing here yet. An earlier version kept the same JSON in a file on
+      // shared storage, so it is taken across rather than lost -- and then
+      // emptied, because it holds a session token and has no business being
+      // readable over USB. Truncated rather than deleted: removing a file needs
+      // FILE:DELETE, which this plugin deliberately does not ask for.
+      val old = legacyFile()
+      if (!old.exists() || !old.canRead()) {
         promise.resolve(null)
         return
       }
-      promise.resolve(file.readText(Charsets.UTF_8))
+      val text = old.readText(Charsets.UTF_8)
+      if (text.isBlank()) {
+        promise.resolve(null)
+        return
+      }
+      prefs().edit().putString(KEY, text).apply()
+      try {
+        old.writeText("", Charsets.UTF_8)
+        LogFile.append("settings: moved out of ${old.absolutePath} and emptied it")
+      } catch (t: Throwable) {
+        LogFile.append("settings: moved in, but could not empty ${old.absolutePath}: $t")
+      }
+      promise.resolve(text)
     } catch (t: Throwable) {
       // Reported rather than resolved as null, which would be indistinguishable
       // from "nothing saved" and would silently reset the user's choices.
@@ -49,15 +82,9 @@ class SettingsModule(reactContext: ReactApplicationContext) :
   @ReactMethod
   fun write(contents: String, promise: Promise) {
     try {
-      val file = file()
-      val dir = file.parentFile
-      if (dir != null && !dir.exists() && !dir.mkdirs()) {
-        promise.reject("WRITE_FAILED", "Could not create ${dir.absolutePath}")
-        return
-      }
-      file.writeText(contents, Charsets.UTF_8)
-      LogFile.append("settings: saved ${file.absolutePath}")
-      promise.resolve(file.absolutePath)
+      prefs().edit().putString(KEY, contents).apply()
+      LogFile.append("settings: saved (${contents.length} chars, not on shared storage)")
+      promise.resolve("preferences")
     } catch (t: Throwable) {
       LogFile.append("settings: write failed $t")
       promise.reject("WRITE_FAILED", t.message ?: t.toString(), t)
@@ -148,6 +175,8 @@ class SettingsModule(reactContext: ReactApplicationContext) :
   }
 
   companion object {
+    private const val PREFS = "look-up-settings"
+    private const val KEY = "settings-json"
     private const val DIR = "Document/LookUp"
     private const val FILE = "settings.json"
   }

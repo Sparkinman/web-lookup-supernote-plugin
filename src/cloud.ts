@@ -46,6 +46,13 @@ const DELETE_DIGEST = 'file/delete/summary';
 /** Where a digest came from, in Supernote's numbering. */
 export const SOURCE_DOCUMENT = 1;
 
+/** Said when the session is no longer good, so callers can tell it apart. */
+export const EXPIRED = 'Your Supernote sign-in has expired. Sign in again in Settings.';
+
+export function isExpired(err: unknown): boolean {
+  return err instanceof Error && err.message === EXPIRED;
+}
+
 /**
  * One request.
  *
@@ -77,6 +84,13 @@ async function call(
     JSON.stringify(headers),
     JSON.stringify(payload),
   );
+
+  // A dead session is its own kind of failure and wants its own answer: the
+  // token lasts thirty days and cannot be renewed, so this means "sign in
+  // again" rather than "something went wrong".
+  if (response.status === 401 || response.status === 403) {
+    throw new Error(EXPIRED);
+  }
 
   let body: Record<string, unknown>;
   try {
@@ -485,4 +499,35 @@ export async function addBookDigest(
     endPosition: positions?.end,
     sourceSize: identity?.size,
   });
+}
+
+
+/**
+ * Whether the stored session still works.
+ *
+ * One cheap authenticated read. A session lasts thirty days and cannot be
+ * renewed, so it will lapse while nobody is looking -- and the first anyone
+ * would otherwise know of it is a passage they meant to keep being refused.
+ *
+ * Answers true when the session is good, false when it has lapsed, and null
+ * when the question could not be asked at all: a device with no network is not
+ * a device that has been signed out, and treating it as one would throw away a
+ * perfectly good token.
+ */
+export async function sessionIsGood(token: string): Promise<boolean | null> {
+  if (!token) {
+    return false;
+  }
+  try {
+    await call('POST', QUERY_DIGESTS, {page: 1, size: 1}, token);
+    log('cloud: the session is still good');
+    return true;
+  } catch (err) {
+    if (isExpired(err)) {
+      log('cloud: the session has expired');
+      return false;
+    }
+    log(`cloud: could not check the session (${err instanceof Error ? err.message : String(err)})`);
+    return null;
+  }
 }

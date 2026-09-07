@@ -55,7 +55,7 @@ import {
   saveSettings,
   type Settings,
 } from './src/settings';
-import {addBookDigest} from './src/cloud';
+import {addBookDigest, isExpired, sessionIsGood} from './src/cloud';
 import {probeBook, probeClosedBook, probePage} from './src/digestprobe';
 import {SettingsScreen} from './src/Settings';
 import {get, openExternally, WEB_AVAILABLE} from './src/web';
@@ -326,6 +326,17 @@ export default function App(): React.JSX.Element {
       lensRef.current = remembered;
       setLens(remembered);
       log(`settings: lens=${loaded.lens} bookQuery=${loaded.bookQuery}`);
+      // Asked once, quietly, at the start. A session lasts thirty days and
+      // lapses while nobody is looking; finding out at the moment you meant to
+      // keep something is the worst time to find out.
+      if (loaded.cloudToken) {
+        void sessionIsGood(loaded.cloudToken).then(good => {
+          if (good === false) {
+            changeRef.current({cloudToken: ''});
+            setStatus('Your Supernote sign-in has expired — sign in again in Settings.');
+          }
+        });
+      }
       if (fromConfig) {
         // Opened to be configured, not to look anything up. Starting a lookup
         // as well would put a search behind the settings for no reason.
@@ -483,6 +494,9 @@ export default function App(): React.JSX.Element {
           finish();
           return;
         } catch (err) {
+          if (isExpired(err)) {
+            changeRef.current({cloudToken: ''});
+          }
           failure = err instanceof Error ? err.message : 'Supernote would not take that.';
         }
       }

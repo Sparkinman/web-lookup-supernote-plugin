@@ -14,7 +14,13 @@
 import React, {useState} from 'react';
 import {ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
 
-import {beginSignIn, CLOUD_AVAILABLE, finishSignIn, testRoundTrip} from './cloud';
+import {
+  beginSignIn,
+  CLOUD_AVAILABLE,
+  finishSignIn,
+  sessionIsGood,
+  testRoundTrip,
+} from './cloud';
 import {cloudPath} from './cloud';
 import {findFile} from './cloudfiles';
 import {fileInfo} from './settings';
@@ -214,6 +220,24 @@ export function SettingsScreen({
       setCloudStatus('Signed in.');
     } catch (err) {
       setCloudStatus(err instanceof Error ? err.message : 'That code was not accepted.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const checkSession = async () => {
+    setBusy(true);
+    setCloudStatus('Asking Supernote whether this sign-in still works…');
+    try {
+      const good = await sessionIsGood(settings.cloudToken);
+      if (good === true) {
+        setCloudStatus('Still signed in.');
+      } else if (good === false) {
+        onChange({cloudToken: ''});
+        setCloudStatus('That sign-in has expired. Sign in again above.');
+      } else {
+        setCloudStatus('Could not reach Supernote, so this proves nothing either way.');
+      }
     } finally {
       setBusy(false);
     }
@@ -460,6 +484,16 @@ export function SettingsScreen({
                   <Text style={styles.choiceHint}>
                     Creates one digest naming the last book you looked something up in, reads it
                     back to see which fields survived, and removes it again.
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.choice, busy && styles.dim]}
+                  disabled={busy}
+                  onPress={() => void checkSession()}>
+                  <Text style={styles.choiceLabel}>Check I am still signed in</Text>
+                  <Text style={styles.choiceHint}>
+                    A sign-in lasts about thirty days and cannot renew itself. This is also
+                    checked quietly whenever the plugin opens.
                   </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
