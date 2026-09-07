@@ -45,7 +45,7 @@ import {
 } from './src/clip';
 import {hostOf, parse, type Block, type Page} from './src/html';
 import {asAddress} from './src/url';
-import {log, LOG_AVAILABLE} from './src/log';
+import {log, LOG_AVAILABLE, setDiagnostics} from './src/log';
 import {DENIED, ensureFileWrite, ensureNetwork} from './src/permissions';
 import {DEFAULT_LENS, LENSES, lensById, resolve, type Lens} from './src/search';
 import {
@@ -251,6 +251,12 @@ export default function App(): React.JSX.Element {
 
   /** Change a setting everywhere at once. */
   const change = useCallback((patch: Partial<Settings>) => {
+    // Diagnostics take effect on the tap, not on the next start: somebody
+    // turning it on is about to reproduce a fault, and asking them to restart
+    // the plugin first is how the interesting part goes unrecorded.
+    if (typeof patch.diagnostics === 'boolean') {
+      setDiagnostics(patch.diagnostics);
+    }
     setSettings(prev => {
       const updated = {...prev, ...patch};
       settingsRef.current = updated;
@@ -459,6 +465,9 @@ export default function App(): React.JSX.Element {
       }
       // After the permission, since the file lives in shared storage.
       const loaded = await loadSettings();
+      // Before anything else is recorded, so a session that is being diagnosed
+      // has its opening steps in the file too.
+      setDiagnostics(loaded.diagnostics);
       settingsRef.current = loaded;
       setSettings(loaded);
       // Before the lookup runs, not after: this is the whole point of
@@ -757,7 +766,15 @@ export default function App(): React.JSX.Element {
     // A draft counts, not only tapped passages. Capture fills the draft
     // without picking anything, and the button that keeps it was hidden --
     // so text could be captured, edited, and then had nowhere to go.
-    if (!page || !anchor || (picked.length === 0 && !note.trim())) {
+    // Every way out of here says why. These returns used to be silent, which
+    // is indistinguishable from a button that is broken: capture, Done, Add to
+    // Digest, and nothing at all happens on screen.
+    if (!anchor) {
+      setStatus('Nothing to attach this to — start from a lasso or a selection.');
+      return;
+    }
+    if (!page) {
+      setStatus('Nothing has been looked up yet.');
       return;
     }
     // Document order, not the order they happened to be tapped in.
@@ -765,6 +782,7 @@ export default function App(): React.JSX.Element {
     // above is the whole point of offering one.
     const text = (note.trim() || chosenText()).trim();
     if (!text) {
+      setStatus('Nothing to keep — capture or choose some text first.');
       return;
     }
     setBusy(true);
@@ -792,10 +810,15 @@ export default function App(): React.JSX.Element {
           // How the device identifies the book, and where in the page the
           // passage sits. Both are what its own digests carry, and both are
           // read here rather than assumed.
+          // Reading the book's identity hashes the whole file. On a large
+          // PDF that is seconds of nothing, which reads as a dead button, so
+          // it says what it is waiting for.
+          setStatus('Reading the book…');
           const [identity, positions] = await Promise.all([
             fileInfo(anchor.source.path),
             positionInPage(anchor.source.page, selection || query),
           ]);
+          setStatus('Adding to the digest…');
           const id = await addBookDigest(
             settings.cloudToken,
             selection || query,
@@ -840,7 +863,7 @@ export default function App(): React.JSX.Element {
     } finally {
       setBusy(false);
     }
-  }, [anchor, chosenText, chosenUrls, clearUnsaved, finish, note, page, picked, query, selection, settings]);
+  }, [anchor, chosenText, chosenUrls, clearUnsaved, finish, note, page, query, selection, settings]);
 
   /**
    * Draw the chosen passages as an image and hang it off the handwriting.

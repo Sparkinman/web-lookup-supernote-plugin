@@ -22,12 +22,29 @@ interface LogStore {
   location(): Promise<string>;
 }
 
-/** Set true to write Document/LookUp/log.txt again while diagnosing. */
-const DIAGNOSTICS = false;
+/**
+ * Whether anything is being written, decided at run time.
+ *
+ * A released build is silent, but a plugin that cannot be made to explain
+ * itself on somebody else's device is a plugin whose bugs cannot be found:
+ * there is no console on a Supernote and no way to attach one. So this is a
+ * switch in Settings rather than a constant in the source, and turning it on
+ * costs the user nothing until they need it.
+ */
+let writing = false;
 
-const store: LogStore | undefined = DIAGNOSTICS
-  ? (NativeModules.LookUpLog as LogStore | undefined)
-  : undefined;
+const module_ = NativeModules.LookUpLog as LogStore | undefined;
+
+/** Turn the log file on or off. Called from settings as they are loaded. */
+export function setDiagnostics(on: boolean): void {
+  writing = on && Boolean(module_);
+}
+
+const store = {
+  get current(): LogStore | undefined {
+    return writing ? module_ : undefined;
+  },
+};
 
 /**
  * Write one line.
@@ -39,11 +56,11 @@ const store: LogStore | undefined = DIAGNOSTICS
  * than no diagnostic.
  */
 export function log(line: string): void {
-  if (!DIAGNOSTICS) {
+  if (!writing) {
     return;
   }
   console.log(`[LookUp] ${line}`);
-  store?.append(line)?.catch(() => {});
+  store.current?.append(line)?.catch(() => {});
 }
 
 /**
@@ -53,7 +70,7 @@ export function log(line: string): void {
  * itself; the last `->` line in the file is where execution stopped.
  */
 export async function step<T>(name: string, fn: () => Promise<T>): Promise<T> {
-  if (!DIAGNOSTICS) {
+  if (!writing) {
     return fn();
   }
   log(`-> ${name}`);
@@ -87,16 +104,16 @@ function describe(value: unknown): string {
 }
 
 export function startSession(header: string): void {
-  store?.startSession(header)?.catch(() => {});
+  store.current?.startSession(header)?.catch(() => {});
 }
 
 export function clearLog(): Promise<boolean> {
-  return store?.clear() ?? Promise.resolve(false);
+  return module_?.clear() ?? Promise.resolve(false);
 }
 
 export function logLocation(): Promise<string> {
-  return store?.location() ?? Promise.resolve('(native log module not loaded)');
+  return module_?.location() ?? Promise.resolve('(native log module not loaded)');
 }
 
 /** Whether the native side is actually there — itself worth knowing. */
-export const LOG_AVAILABLE = Boolean(store);
+export const LOG_AVAILABLE = Boolean(module_);

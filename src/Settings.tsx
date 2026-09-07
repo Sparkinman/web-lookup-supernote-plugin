@@ -378,6 +378,18 @@ export function SettingsScreen({
           </View>
         </Fold>
 
+        <Fold
+          title="Reporting a fault"
+          open={open === 'diagnostics'}
+          onToggle={() => fold('diagnostics')}>
+          <Check
+            on={settings.diagnostics}
+            label="Keep a record of what the plugin did"
+            hint="Writes Document/LookUp/log.txt. Leave off unless something is going wrong and you have been asked for it — then copy that file off the device"
+            onPress={() => onChange({diagnostics: !settings.diagnostics})}
+          />
+        </Fold>
+
         <Fold title="Reading a book" open={open === 'book'} onToggle={() => fold('book')}>
           {BOOK_QUERY_CHOICES.map(choice => (
             <TouchableOpacity
