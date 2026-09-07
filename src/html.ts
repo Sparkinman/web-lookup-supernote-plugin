@@ -34,6 +34,16 @@ export interface Page {
    * article.
    */
   viewerUrl?: string;
+  /**
+   * How to ask for the next page of results.
+   *
+   * DuckDuckGo's next page is a form post carrying the query, an offset and a
+   * handful of tokens it issued with this page -- a GET with `&s=10` simply
+   * returns the first ten again, which is worth saying because it looks like it
+   * works. So the fields are taken from the page that offered them rather than
+   * constructed, and sent back as they were given.
+   */
+  next?: {url: string; body: string};
 }
 
 const ENTITIES: Record<string, string> = {
@@ -261,6 +271,91 @@ export function readDuckDuckGoLite(html: string, baseUrl: string): Page {
 }
 
 /**
+ * DuckDuckGo's HTML endpoint.
+ *
+ * A different page from the lite one, and a better one to read: the same ten
+ * results with fuller snippets, and a next-page control that actually works.
+ * Results are marked with `result__a` and their abstracts with
+ * `result__snippet`.
+ *
+ * The link is sometimes wrapped in DuckDuckGo's redirect and sometimes not --
+ * the first page wraps, later pages do not -- so both are handled rather than
+ * assuming either.
+ */
+export function readDuckDuckGoHtml(html: string, baseUrl: string): Page {
+  const clean = stripNoise(html);
+  const blocks: Block[] = [];
+
+  const anchor = /<a\b([^>]*\bclass="[^"]*result__a[^"]*"[^>]*)>([\s\S]*?)<\/a>/gi;
+  const hits: {href: string; title: string; end: number}[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = anchor.exec(clean)) !== null) {
+    const href = absolute(hrefOf(`<a ${match[1]}>`), baseUrl);
+    const title = textOf(match[2]);
+    if (href && title) {
+      hits.push({href, title, end: anchor.lastIndex});
+    }
+  }
+
+  hits.forEach((hit, index) => {
+    const limit = index + 1 < hits.length ? hits[index + 1].end : clean.length;
+    const between = clean.slice(hit.end, limit);
+    const snippet = /class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/i.exec(between);
+    blocks.push({
+      kind: 'result',
+      text: hit.title,
+      href: hit.href,
+      ...(snippet ? {detail: textOf(snippet[1])} : {}),
+    });
+  });
+
+  if (blocks.length === 0) {
+    return readArticle(html, baseUrl);
+  }
+  return {
+    title: titleOf(clean) || 'Results',
+    blocks: dedupe(blocks),
+    ...(nextForm(clean, baseUrl) ?? {}),
+  };
+}
+
+/**
+ * The hidden fields behind the "next page" button, ready to be sent back.
+ *
+ * Taken from the page rather than built, because two of them -- `vqd` and
+ * `nextParams` -- are tokens this page issued and the next one will check.
+ */
+function nextForm(clean: string, baseUrl: string): {next: {url: string; body: string}} | undefined {
+  // The last form on the page is the one that goes forward; the first is the
+  // search box itself.
+  const forms = clean.match(/<form\b[\s\S]*?<\/form>/gi) ?? [];
+  for (const form of forms.reverse()) {
+    const fields: Record<string, string> = {};
+    const input = /<input\b([^>]*)>/gi;
+    let hit: RegExpExecArray | null;
+    while ((hit = input.exec(form)) !== null) {
+      const name = /\bname="([^"]*)"/i.exec(hit[1])?.[1];
+      if (!name) {
+        continue;
+      }
+      fields[name] = decodeEntities(/\bvalue="([^"]*)"/i.exec(hit[1])?.[1] ?? '');
+    }
+    // A forward form is the one carrying an offset. Without it this is the
+    // search box, which would fetch the first page again.
+    if (!fields.s || !fields.q) {
+      continue;
+    }
+    const action = /\baction="([^"]*)"/i.exec(form)?.[1];
+    const url = (action && absolute(action, baseUrl)) || baseUrl.split('?')[0];
+    const body = Object.entries(fields)
+      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+      .join('&');
+    return {next: {url, body}};
+  }
+  return undefined;
+}
+
+/**
  * Wikipedia, read through its API rather than scraped.
  *
  * Special:Search redirects to the desktop site and returns some seventy
@@ -354,6 +449,9 @@ function choose(body: string, url: string): Page {
   const host = hostOf(url);
   if (/(^|\.)duckduckgo\.com$/i.test(host) && /\/lite/i.test(url)) {
     return withFallback(readDuckDuckGoLite(body, url), body, url);
+  }
+  if (/(^|\.)duckduckgo\.com$/i.test(host) && /\/html/i.test(url)) {
+    return withFallback(readDuckDuckGoHtml(body, url), body, url);
   }
   if (/wikipedia\.org$/i.test(host) && url.includes('/w/api.php')) {
     return readWikipediaApi(body, url);

@@ -24,14 +24,23 @@ export interface Lens {
   /** Build a URL for a query. */
   url(query: string): string;
   /**
-   * The same query, further down the list.
+   * The same query, one page further on.
    *
-   * Absent when there is no more to fetch, which is how the reader knows
-   * whether to offer another page at all.
+   * `page` counts from one, meaning the page already shown. Absent where the
+   * next page is not a URL at all: DuckDuckGo's is a form post, and the page
+   * itself carries the fields for it.
    */
-  more?(query: string, offset: number): string;
+  more?(query: string, page: number): string;
   /** Shown under the search box so the behaviour is not a surprise. */
   hint: string;
+  /**
+   * A few words under the button itself.
+   *
+   * Short enough to sit beneath a label without making the row tall: the point
+   * is to tell four similar-looking buttons apart at a glance, not to explain
+   * them fully. The longer `hint` does that.
+   */
+  short: string;
   /**
    * Open the first result instead of showing the list.
    *
@@ -48,6 +57,7 @@ const encode = (q: string) => encodeURIComponent(q.trim());
 export const LENSES: Lens[] = [
   {
     id: 'quick',
+    short: 'Best match, opened',
     label: 'Top hit',
     url: q => `https://lite.duckduckgo.com/lite/?q=${encode(q)}`,
     hint: 'DuckDuckGo, opened straight into the best match',
@@ -55,16 +65,19 @@ export const LENSES: Lens[] = [
   },
   {
     id: 'web',
+    short: 'Full result list',
     label: 'DuckDuckGo',
-    url: q => `https://lite.duckduckgo.com/lite/?q=${encode(q)}`,
-    // `s` is the offset into the results. The lite page's own next-page control
-    // is a form post carrying half a dozen hidden fields, but the offset alone
-    // is enough to get the following ten.
-    more: (q, offset) => `https://lite.duckduckgo.com/lite/?q=${encode(q)}&s=${offset}`,
+    // The HTML endpoint rather than the lite one: the same results with fuller
+    // abstracts, and a next-page control that works. It has no `more` here
+    // because paging it is a form post, which the page itself carries -- an
+    // offset in the query string returns the first ten again, which is worth
+    // knowing because it looks like it worked.
+    url: q => `https://html.duckduckgo.com/html/?q=${encode(q)}`,
     hint: 'The whole result list from DuckDuckGo, ten at a time',
   },
   {
     id: 'wikipedia',
+    short: 'Encyclopedia only',
     label: 'Wikipedia',
     // Read through the API rather than the site. Special:Search redirects to
     // the desktop layout and returns some seventy kilobytes of navigation
@@ -75,20 +88,24 @@ export const LENSES: Lens[] = [
       'https://en.wikipedia.org/w/api.php?action=query&format=json&formatversion=2' +
       `&generator=search&gsrsearch=${encode(q)}&gsrlimit=8` +
       '&prop=extracts&exintro=1&explaintext=1',
-    more: (q, offset) =>
+    more: (q, page) =>
       'https://en.wikipedia.org/w/api.php?action=query&format=json&formatversion=2' +
-      `&generator=search&gsrsearch=${encode(q)}&gsrlimit=8&gsroffset=${offset}` +
+      `&generator=search&gsrsearch=${encode(q)}&gsrlimit=8&gsroffset=${page * 8}` +
       '&prop=extracts&exintro=1&explaintext=1',
     hint: 'Encyclopedia articles only, as plain prose',
   },
   {
     id: 'simple',
+    short: 'Small, plain pages',
     label: 'Wiby',
     // Wiby deliberately indexes small, hand-made, text-first pages. A niche
     // index, but the lightest thing on this list by a wide margin and the
     // closest the modern web gets to reading like a book.
     url: q => `https://wiby.me/?q=${encode(q)}`,
-    more: (q, offset) => `https://wiby.me/?q=${encode(q)}&p=${Math.floor(offset / 10) + 2}`,
+    // Wiby pages by number, twelve at a time, and counts from one -- so the
+    // second page is p=2. An earlier version worked in tens and asked for p=3,
+    // quietly skipping a page.
+    more: (q, page) => `https://wiby.me/?q=${encode(q)}&p=${page + 1}`,
     hint: 'Small hand-made pages, no advertising or scripts',
   },
 ];

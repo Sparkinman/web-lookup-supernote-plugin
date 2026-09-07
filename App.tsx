@@ -59,7 +59,7 @@ import {
 } from './src/settings';
 import {addBookDigest, calibrate, isExpired, sessionIsGood} from './src/cloud';
 import {SettingsScreen} from './src/Settings';
-import {get, openExternally, WEB_AVAILABLE} from './src/web';
+import {get, openExternally, postForm, WEB_AVAILABLE} from './src/web';
 import {
   onButtonPress,
   onConfigPress,
@@ -97,8 +97,8 @@ export default function App(): React.JSX.Element {
   const [page, setPage] = useState<Page | null>(null);
   const [url, setUrl] = useState<string | null>(null);
   const [history, setHistory] = useState<string[]>([]);
-  /** How far down the result list we have asked for, so "more" can ask further. */
-  const [offset, setOffset] = useState(0);
+  /** Which page of results is showing, counting from one. */
+  const [resultPage, setResultPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [picked, setPicked] = useState<number[]>([]);
   const [status, setStatus] = useState<string | null>(null);
@@ -270,13 +270,13 @@ export default function App(): React.JSX.Element {
       if (address) {
         log(`address: ${address}`);
         setHistory([]);
-        setOffset(0);
+        setResultPage(1);
         await open(address);
         return;
       }
       log(`search: "${trimmed}" lens=${withLens.id}`);
       setHistory([]);
-      setOffset(0);
+      setResultPage(1);
       await open(resolve(trimmed, withLens), withLens.followFirst);
     },
     [open],
@@ -543,15 +543,44 @@ export default function App(): React.JSX.Element {
    * endless scroll: fetching on scroll would be a repaint on a display that
    * charges dearly for them.
    */
-  const showMore = useCallback(() => {
+  const showMore = useCallback(async () => {
+    // Two ways forward, because search engines differ. Wikipedia and Wiby take
+    // an offset in the address; DuckDuckGo's next page is a form it hands out
+    // with the current one, carrying tokens that only work once.
+    if (page?.next) {
+      setLoading(true);
+      setStatus(null);
+      try {
+        log(`more: posting to ${page.next.url}`);
+        const response = await postForm(page.next.url, page.next.body);
+        const parsed = parse(response.body, page.next.url);
+        if (parsed.blocks.length === 0) {
+          setStatus('No more results.');
+          return;
+        }
+        setHistory(prev => (url ? [...prev, url] : prev));
+        setUrl(page.next.url);
+        setPage(parsed);
+        setPicked([]);
+        setResultPage(current => current + 1);
+        scrollRef.current?.scrollTo({y: 0, animated: false});
+        blockAt.current.clear();
+        viewport.current.scrollY = 0;
+      } catch (err) {
+        setStatus(`Could not fetch more: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
     if (!lens.more || !query.trim()) {
       return;
     }
-    const next = offset + 10;
-    setOffset(next);
-    log(`more: ${lens.id} from ${next}`);
-    void open(lens.more(query, next));
-  }, [lens, offset, open, query]);
+    const next = resultPage + 1;
+    setResultPage(next);
+    log(`more: ${lens.id} page ${next}`);
+    await open(lens.more(query, resultPage));
+  }, [lens, open, page, query, resultPage, url]);
 
   const back = useCallback(() => {
     const previous = history[history.length - 1];
@@ -941,6 +970,11 @@ export default function App(): React.JSX.Element {
             <Text style={[styles.lensText, l.id === lens.id && styles.lensTextOn]}>
               {l.label}
             </Text>
+            {/* Under each one, not only the chosen one: four buttons that all
+                say "search" are told apart by what is written beneath them. */}
+            <Text style={[styles.lensShort, l.id === lens.id && styles.lensTextOn]}>
+              {l.short}
+            </Text>
           </TouchableOpacity>
         ))}
         <View style={styles.spacer} />
@@ -953,11 +987,6 @@ export default function App(): React.JSX.Element {
 
       <Text style={styles.hint} numberOfLines={2}>
         {status ?? (url ? `${page?.title ?? ''} — ${hostOf(url)}` : lens.hint)}
-      </Text>
-      {/* What the chosen lens does, said plainly and always. It used to appear
-          only before a search, which is the one moment nobody is wondering. */}
-      <Text style={styles.lensHint} numberOfLines={1}>
-        {lens.label}: {lens.hint}
       </Text>
       {anchor ? (
         // Shown while reading as well as printed on the clipping: it is the
@@ -1060,8 +1089,8 @@ export default function App(): React.JSX.Element {
                 : `${picked.length === 1 ? '1 passage' : `${picked.length} passages`} chosen`)}
           </Text>
           <View style={styles.footerButtons}>
-          {page.blocks.some(block => block.kind === 'result') && lens.more ? (
-            <TouchableOpacity style={styles.btn} onPress={showMore}>
+          {page.blocks.some(block => block.kind === 'result') && (lens.more || page.next) ? (
+            <TouchableOpacity style={styles.btn} onPress={() => void showMore()}>
               <Text style={styles.btnText}>More results</Text>
             </TouchableOpacity>
           ) : null}
@@ -1225,6 +1254,7 @@ const styles = StyleSheet.create({
     borderBottomColor: '#000',
   },
   lens: {
+    alignItems: 'flex-start',
     paddingHorizontal: 12,
     paddingVertical: 6,
     marginRight: 6,
@@ -1235,7 +1265,7 @@ const styles = StyleSheet.create({
   lensText: {fontSize: 14, color: '#000'},
   lensTextOn: {color: '#fff'},
   spacer: {flex: 1},
-  lensHint: {fontSize: 13, color: '#000', paddingHorizontal: 12, paddingBottom: 6},
+  lensShort: {fontSize: 12, color: '#000', marginTop: 2},
   hint: {paddingHorizontal: 12, paddingVertical: 6, fontSize: 13, color: '#000'},
   reference: {paddingHorizontal: 12, paddingBottom: 4, fontSize: 12, color: '#000'},
   body: {flex: 1},
