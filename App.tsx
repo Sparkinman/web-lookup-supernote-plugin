@@ -859,16 +859,15 @@ export default function App(): React.JSX.Element {
       return;
     }
 
-    const mode = captureMode(settings);
-    if (!mode) {
-      setStatus('Nothing to insert — turn on the clipping or the page link in Settings.');
-      return;
-    }
     setBusy(true);
     setStatus('Inserting…');
     try {
       const failure = await attachClip(anchor, {
-        mode,
+        // Links, and only links. This button says it inserts links, so it does
+        // not also write a picture: the Screenshot button is what makes one,
+        // and a picture appearing from a button that did not offer one is a
+        // side effect the name hides.
+        mode: 'link',
         title: page.title || query,
         // Two lines: where the lookup started, then where the text came from.
         source: [reference(anchor), page.viewerUrl ?? url ?? ''].filter(Boolean).join('\n'),
@@ -1462,7 +1461,7 @@ export default function App(): React.JSX.Element {
               style={[styles.insert, busy && styles.btnOff]}
               onPress={clip}
               disabled={busy}>
-              <Text style={styles.insertText}>Insert link and notes</Text>
+              <Text style={styles.insertText}>Insert links</Text>
             </TouchableOpacity>
           )}
           </View>

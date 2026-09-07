@@ -100,6 +100,72 @@ async function flush(): Promise<boolean> {
   }
 }
 
+/** Every rectangle already spoken for on this page. */
+function occupied(elements: Record<string, unknown>[]): Rect[] {
+  const taken: Rect[] = [];
+  for (const element of elements) {
+    const box = (element.textBox as {textRect?: Rect} | undefined)?.textRect;
+    if (box) {
+      taken.push(box);
+    }
+    // A link is not a text box: it carries its own position and size, and its
+    // default style is a solid underline drawn across whatever sits there. An
+    // icon placed inside one is swallowed by it -- the link takes the touch,
+    // so the pencil gets underlined and opens the link instead of the words.
+    const link = element.link as
+      | {X?: number; Y?: number; width?: number; height?: number}
+      | undefined;
+    if (link && typeof link.X === 'number' && typeof link.Y === 'number') {
+      taken.push({
+        left: link.X,
+        top: link.Y,
+        right: link.X + (link.width ?? 0),
+        bottom: link.Y + (link.height ?? 0),
+      });
+    }
+  }
+  return taken;
+}
+
+function overlaps(a: Rect, b: Rect): boolean {
+  return !(a.right <= b.left || a.left >= b.right || a.bottom <= b.top || a.top >= b.bottom);
+}
+
+/**
+ * Somewhere the pencil can sit without being sat on.
+ *
+ * Beside the writing first, which is where a margin mark belongs and, more to
+ * the point, is out of the row of link labels that "Insert link and notes"
+ * puts directly beneath it. Failing that, down the left in steps until there
+ * is a gap. Returns null when the page has no room, and the caller writes
+ * nothing rather than putting the pencil somewhere it cannot be tapped.
+ */
+function freeSpot(
+  writing: Rect,
+  width: number,
+  height: number,
+  taken: Rect[],
+  pageWidth: number,
+  pageHeight: number,
+): Rect | null {
+  const candidates: Rect[] = [];
+  const beside = writing.right + GAP;
+  if (beside + width <= pageWidth - GAP) {
+    const top = Math.max(GAP, Math.min(writing.bottom - height, pageHeight - height - GAP));
+    candidates.push({left: beside, top, right: beside + width, bottom: top + height});
+  }
+  const left = Math.min(writing.left, pageWidth - width - GAP);
+  for (let top = writing.bottom + GAP; top + height <= pageHeight - GAP; top += height + GAP) {
+    candidates.push({left, top, right: left + width, bottom: top + height});
+  }
+  for (const spot of candidates) {
+    if (!taken.some(other => overlaps(spot, other))) {
+      return spot;
+    }
+  }
+  return null;
+}
+
 /** Read the page and say what is on it, for comparing before with after. */
 async function census(path: string, page: number, when: string): Promise<number> {
   const elements = unwrap<Record<string, unknown>[]>(await PluginFileAPI.getElements(page, path));
@@ -149,9 +215,29 @@ export async function placeIcon(
   }
 
   const id = `${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
-  const left = anchor.rect.left;
-  const top = Math.min(anchor.rect.bottom + 20, (anchor.pageSize?.height ?? 2560) - ICON_SIZE - 20);
-  const rect = boxFor(label, left, top);
+  const pageWidth = anchor.pageSize?.width ?? 1920;
+  const pageHeight = anchor.pageSize?.height ?? 2560;
+  const size = boxFor(label, 0, 0);
+
+  // Beside the writing, or below it, but never on top of anything already
+  // there. "Insert links" lays its labels in a row immediately beneath the
+  // handwriting, at the very spot the pencil used to take -- and a link is
+  // drawn as an underline that swallows the touch, so the pencil came out
+  // underlined and opened the link instead of the words.
+  const existing = unwrap<Record<string, unknown>[]>(await PluginFileAPI.getElements(page, path));
+  const rect = freeSpot(
+    anchor.rect,
+    size.right - size.left,
+    size.bottom - size.top,
+    Array.isArray(existing) ? occupied(existing) : [],
+    pageWidth,
+    pageHeight,
+  );
+  if (!rect) {
+    return 'there is no clear space on this page to put the mark';
+  }
+  const left = rect.left;
+  const top = rect.top;
 
   const element = unwrap<Record<string, unknown>>(await PluginCommAPI.createElement(TYPE_TEXT));
   if (!element) {
@@ -188,7 +274,10 @@ export async function placeIcon(
       log(`expandable: insert refused — ${why}`);
       return why;
     }
-    log(`expandable: inserted icon ${id} at ${left},${top} carrying ${text.length} characters`);
+    log(
+      `expandable: inserted icon ${id} at ${left},${top}..${rect.right},${rect.bottom} ` +
+        `carrying ${text.length} characters`,
+    );
   } catch (err) {
     const why = err instanceof Error ? err.message : 'an unknown error';
     log(`expandable: insert threw — ${why}`);
