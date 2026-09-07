@@ -166,55 +166,99 @@ export async function probePage(notePath: string, page: number): Promise<void> {
 export async function probeBook(bookPath: string, page: number): Promise<void> {
   log(`probe: looking at the book ${bookPath} page ${page}`);
 
+  const markPath = `${bookPath}.mark`;
+  let marked: number[] = [];
   try {
-    report('getMarkPages', await PluginFileAPI.getMarkPages(bookPath));
+    const response = (await PluginFileAPI.getMarkPages(bookPath)) as
+      | LooseResponse<number[]>
+      | null
+      | undefined;
+    if (response?.success && Array.isArray(response.result)) {
+      marked = response.result;
+      log(`probe: getMarkPages ok ${JSON.stringify(marked)}`);
+    } else {
+      log(`probe: getMarkPages refused ${JSON.stringify(response?.error ?? null)}`);
+    }
   } catch (err) {
     log(`probe: getMarkPages threw — ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  // The mark file sits beside the document under the same name. Both spellings
-  // are tried because which one these calls want is not documented.
-  const markPath = `${bookPath}.mark`;
-  try {
-    report('getMarkPages(.mark)', await PluginFileAPI.getMarkPages(markPath));
-  } catch (err) {
-    log(`probe: getMarkPages(.mark) threw — ${err instanceof Error ? err.message : String(err)}`);
+  /**
+   * Which numbers to try as the page argument.
+   *
+   * The document's own page number returned nothing on a page that
+   * getMarkPages says is marked, so the argument is probably an index into the
+   * mark file rather than into the document -- the list is what the mark file
+   * holds, in order, and the page wanted sits at some position in it. Both are
+   * tried, along with the first entry as a control: if index 0 answers and the
+   * document number does not, that settles which one this argument means.
+   */
+  const at = marked.indexOf(page);
+  const attempts: {label: string; index: number}[] = [
+    {label: `document page ${page}`, index: page},
+  ];
+  if (at >= 0) {
+    attempts.push({label: `mark index ${at} (page ${page})`, index: at});
+  }
+  if (marked.length > 0) {
+    attempts.push({label: 'mark index 0 (control)', index: 0});
   }
 
-  for (const [label, path] of [
-    ['book', bookPath],
-    ['mark', markPath],
-  ] as const) {
-    try {
-      const response = (await PluginFileAPI.getElements(page, path)) as
-        | LooseResponse<Record<string, unknown>[]>
-        | null
-        | undefined;
-      if (!response?.success || !Array.isArray(response.result)) {
-        log(`probe: getElements(${label}) refused ${JSON.stringify(response?.error ?? null)}`);
-        continue;
-      }
-      const elements = response.result;
-      log(
-        `probe: getElements(${label}) returned ${elements.length}, ` +
-          `types [${elements.map(e => e?.type).join(',')}]`,
-      );
-      for (const element of elements) {
-        const box = element?.textBox as Record<string, unknown> | undefined;
-        const data = typeof box?.textDigestData === 'string' ? box.textDigestData : '';
-        if (data) {
-          log(`probe: DIGEST BOX (${label}) ${JSON.stringify(box).slice(0, 800)}`);
-          describe(`probe: DIGEST DATA (${label})`, data);
+  for (const attempt of attempts) {
+    for (const [label, path] of [
+      ['book', bookPath],
+      ['mark', markPath],
+    ] as const) {
+      try {
+        const response = (await PluginFileAPI.getElements(attempt.index, path)) as
+          | LooseResponse<Record<string, unknown>[]>
+          | null
+          | undefined;
+        if (!response?.success || !Array.isArray(response.result)) {
+          log(
+            `probe: getElements(${label}, ${attempt.label}) refused ` +
+              `${JSON.stringify(response?.error ?? null)}`,
+          );
+          continue;
         }
+        const elements = response.result;
+        log(
+          `probe: getElements(${label}, ${attempt.label}) returned ${elements.length}, ` +
+            `types [${elements.map(e => e?.type).join(',')}]`,
+        );
+        for (const element of elements) {
+          const box = element?.textBox as Record<string, unknown> | undefined;
+          const link = element?.link as Record<string, unknown> | undefined;
+          if (box) {
+            log(`probe: TEXT BOX (${label}) ${JSON.stringify(box).slice(0, 900)}`);
+            const data = typeof box.textDigestData === 'string' ? box.textDigestData : '';
+            if (data) {
+              describe(`probe: DIGEST DATA (${label})`, data);
+            }
+          }
+          if (link) {
+            log(`probe: LINK (${label}) ${JSON.stringify(link).slice(0, 500)}`);
+          }
+        }
+      } catch (err) {
+        log(
+          `probe: getElements(${label}, ${attempt.label}) threw — ` +
+            `${err instanceof Error ? err.message : String(err)}`,
+        );
       }
-    } catch (err) {
-      log(`probe: getElements(${label}) threw — ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
-  try {
-    report('getElementCounts', await PluginFileAPI.getElementCounts(bookPath, page));
-  } catch (err) {
-    log(`probe: getElementCounts threw — ${err instanceof Error ? err.message : String(err)}`);
+  // Counts take their arguments the other way round from getElements, which is
+  // worth exercising separately in case only one of the two is index-based.
+  for (const attempt of attempts) {
+    try {
+      report(
+        `getElementCounts(${attempt.label})`,
+        await PluginFileAPI.getElementCounts(bookPath, attempt.index),
+      );
+    } catch (err) {
+      log(`probe: getElementCounts threw — ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 }
