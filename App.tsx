@@ -937,32 +937,55 @@ export default function App(): React.JSX.Element {
   }, [chosenText, guard, mark, pageAsText, range, selecting, visibleText]);
 
   /**
-   * Round B: place one icon, deliberately, and check the page afterwards.
+   * Fold what was kept into a pencil on the page.
    *
-   * Its own button rather than part of anything else. The last write to a note
-   * was folded into a button that did several things, so it ran before it had
-   * been proven -- this one happens only when it is asked for, and says what
-   * the page held before and after.
+   * The alternative to a picture and a pair of links: one small mark beside the
+   * handwriting that opens the words in place when tapped, and shuts again when
+   * tapped a second time -- no page to jump to and no plugin to reopen.
+   *
+   * The words cannot ride on the element. `userData` is declared in the SDK and
+   * discarded by the firmware, so they are kept in the plugin's own store and
+   * the pencil is found by where it sits. The practical consequence is that a
+   * clipping does not follow its note to another device.
    */
-  const testIcon = useCallback(async () => {
+  const keepAsClipping = useCallback(async () => {
     if (!anchor?.isNote) {
       setStatus('Open this from a note first.');
       return;
     }
-    const text = note.trim() || chosenText() || 'Round B test clipping.';
+    // The draft first, exactly as Paste does: an edit made above is the point
+    // of offering one. Nothing is placed for an empty clipping -- a pencil that
+    // opens onto nothing is worse than no pencil.
+    const text = (note.trim() || chosenText()).trim();
+    if (!text) {
+      setStatus('Nothing to keep yet — capture or choose some text first.');
+      return;
+    }
     setBusy(true);
-    setStatus('Placing one icon…');
+    setStatus('Folding it into the page…');
     try {
       const refused = await placeIcon(
         anchor,
         labelOr(settings.notesLabel, DEFAULT_SETTINGS.notesLabel),
         text,
       );
-      setStatus(refused ? `Refused: ${refused}` : 'Icon placed. Check the page and the log.');
+      if (refused) {
+        setStatus(`Could not keep that: ${refused}`);
+        return;
+      }
+      // Cleared for the same reason Paste clears: the next lookup used to ask
+      // whether to discard text that had already been kept.
+      setPicked([]);
+      setUnsaved(false);
+      setNote('');
+      noteTouched.current = false;
+      setEditingNote(false);
+      setStatus('Kept. Tap the mark on your page to open it.');
+      finish();
     } finally {
       setBusy(false);
     }
-  }, [anchor, chosenText, note, settings]);
+  }, [anchor, chosenText, finish, note, settings]);
 
   /** Photograph the reader as it stands, and hang the picture off the writing. */
   const screenshot = useCallback(async () => {
@@ -1426,12 +1449,12 @@ export default function App(): React.JSX.Element {
               <Text style={styles.insertText}>Screenshot</Text>
             </TouchableOpacity>
           )}
-          {anchor?.isNote && (
+          {anchor?.isNote && (picked.length > 0 || note.trim().length > 0) && (
             <TouchableOpacity
-              style={[styles.btn, busy && styles.btnOff]}
-              onPress={() => void testIcon()}
+              style={[styles.insert, busy && styles.btnOff]}
+              onPress={() => void keepAsClipping()}
               disabled={busy}>
-              <Text style={styles.btnText}>Test: place icon</Text>
+              <Text style={styles.insertText}>Keep as clipping</Text>
             </TouchableOpacity>
           )}
           {anchor?.isNote && CLIP_AVAILABLE && (
