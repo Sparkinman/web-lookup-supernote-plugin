@@ -71,6 +71,15 @@ export interface Settings {
   cloudEmail: string;
   /** The session token. Kept rather than the password, which is never stored. */
   cloudToken: string;
+  /**
+   * The half-finished sign-in, kept on disk rather than in memory.
+   *
+   * Reading the emailed code means leaving the device's plugin screen, which
+   * closes the panel and takes any React state with it. Held here, the code
+   * field is still waiting when the user comes back with the code.
+   */
+  cloudCodeKey: string;
+  cloudCodeStamp: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -89,6 +98,8 @@ export const DEFAULT_SETTINGS: Settings = {
   lastBook: '',
   cloudEmail: '',
   cloudToken: '',
+  cloudCodeKey: '',
+  cloudCodeStamp: '',
 };
 
 /**
@@ -171,6 +182,8 @@ export async function loadSettings(): Promise<Settings> {
       lastBook: typeof parsed.lastBook === 'string' ? parsed.lastBook : '',
       cloudEmail: typeof parsed.cloudEmail === 'string' ? parsed.cloudEmail : '',
       cloudToken: typeof parsed.cloudToken === 'string' ? parsed.cloudToken : '',
+      cloudCodeKey: typeof parsed.cloudCodeKey === 'string' ? parsed.cloudCodeKey : '',
+      cloudCodeStamp: typeof parsed.cloudCodeStamp === 'string' ? parsed.cloudCodeStamp : '',
     };
   } catch (err) {
     log(`settings: could not read (${err instanceof Error ? err.message : String(err)})`);

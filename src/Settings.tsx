@@ -157,7 +157,6 @@ export function SettingsScreen({
    */
   const [password, setPassword] = useState('');
   const [code, setCode] = useState('');
-  const [pending, setPending] = useState<{validCodeKey: string; timestamp: unknown} | null>(null);
   const [cloudStatus, setCloudStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -167,14 +166,20 @@ export function SettingsScreen({
     try {
       const answer = await beginSignIn(settings.cloudEmail, password);
       if (answer.token) {
-        onChange({cloudToken: answer.token});
-        setPending(null);
+        onChange({cloudToken: answer.token, cloudCodeKey: '', cloudCodeStamp: ''});
         setPassword('');
         setCloudStatus('Signed in.');
         return;
       }
-      setPending({validCodeKey: answer.validCodeKey ?? '', timestamp: answer.timestamp});
-      setCloudStatus('Supernote has emailed you a code. Enter it below.');
+      // Written to disk, not held in state: reading the email means leaving
+      // this screen, and the panel does not survive that.
+      onChange({
+        cloudCodeKey: answer.validCodeKey ?? '',
+        cloudCodeStamp: String(answer.timestamp ?? ''),
+      });
+      setCloudStatus(
+        'Supernote has emailed you a code. Fetch it, come back here, and type it below — this screen will still be waiting.',
+      );
     } catch (err) {
       setCloudStatus(err instanceof Error ? err.message : 'That did not work.');
     } finally {
@@ -183,7 +188,12 @@ export function SettingsScreen({
   };
 
   const enterCode = async () => {
-    if (!pending) {
+    if (!code.trim()) {
+      setCloudStatus('Type the code from the email first.');
+      return;
+    }
+    if (!settings.cloudCodeKey) {
+      setCloudStatus('Ask for a code first — the button above sends one.');
       return;
     }
     setBusy(true);
@@ -192,11 +202,10 @@ export function SettingsScreen({
       const token = await finishSignIn(
         settings.cloudEmail,
         code,
-        pending.validCodeKey,
-        pending.timestamp,
+        settings.cloudCodeKey,
+        settings.cloudCodeStamp,
       );
-      onChange({cloudToken: token});
-      setPending(null);
+      onChange({cloudToken: token, cloudCodeKey: '', cloudCodeStamp: ''});
       setPassword('');
       setCode('');
       setCloudStatus('Signed in.');
@@ -332,11 +341,17 @@ export function SettingsScreen({
           />
         </Fold>
 
-        {CLOUD_AVAILABLE ? (
-          <Fold
+        <Fold
             title={settings.cloudToken ? 'Supernote Cloud — signed in' : 'Supernote Cloud'}
             open={open === 'cloud'}
             onToggle={() => fold('cloud')}>
+            {CLOUD_AVAILABLE ? null : (
+              // Said rather than hidden: a section that silently disappears
+              // looks like a feature that was never built.
+              <Text style={styles.help}>
+                This build has no network module, so signing in cannot work. Reinstall the plugin.
+              </Text>
+            )}
             <Text style={styles.help}>
               A digest taken from a book cannot be written on the device: its markup is locked
               while the book is open and out of bounds once it is closed. Supernote's own service
@@ -378,26 +393,34 @@ export function SettingsScreen({
               <Text style={styles.choiceLabel}>Sign in / send me a code</Text>
             </TouchableOpacity>
 
-            {pending ? (
-              <View style={styles.field}>
-                <Text style={styles.fieldLabel}>The code Supernote emailed you</Text>
-                <View style={styles.fieldRow}>
-                  <TextInput
-                    style={styles.input}
-                    value={code}
-                    onChangeText={setCode}
-                    keyboardType="number-pad"
-                    autoCorrect={false}
-                  />
-                  <TouchableOpacity
-                    style={[styles.browse, busy && styles.dim]}
-                    disabled={busy}
-                    onPress={() => void enterCode()}>
-                    <Text style={styles.browseLabel}>Enter</Text>
-                  </TouchableOpacity>
-                </View>
+            {/* Always here, never conditional on the step before having
+                succeeded. Supernote may well have sent a code even when the
+                reply could not be read, and a field that appears only on
+                success leaves that code with nowhere to go. */}
+            <View style={styles.field}>
+              <Text style={styles.fieldLabel}>The code Supernote emailed you</Text>
+              <View style={styles.fieldRow}>
+                <TextInput
+                  style={styles.input}
+                  value={code}
+                  onChangeText={setCode}
+                  keyboardType="number-pad"
+                  placeholder="123456"
+                  autoCorrect={false}
+                />
+                <TouchableOpacity
+                  style={[styles.browse, busy && styles.dim]}
+                  disabled={busy}
+                  onPress={() => void enterCode()}>
+                  <Text style={styles.browseLabel}>Enter</Text>
+                </TouchableOpacity>
               </View>
-            ) : null}
+              <Text style={styles.choiceHint}>
+                {settings.cloudCodeKey
+                  ? 'A code has been requested. Type it here whenever you have it — leaving this screen does not lose it.'
+                  : 'Ask for a code with the button above first.'}
+              </Text>
+            </View>
 
             {settings.cloudToken ? (
               <>
@@ -423,8 +446,7 @@ export function SettingsScreen({
             ) : null}
 
             {cloudStatus ? <Text style={styles.help}>{cloudStatus}</Text> : null}
-          </Fold>
-        ) : null}
+        </Fold>
 
         <Fold title="How this works" open={open === 'help'} onToggle={() => fold('help')}>
           <Text style={styles.help}>
