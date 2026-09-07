@@ -1,97 +1,38 @@
-This is a new [**React Native**](https://reactnative.dev) project, bootstrapped using [`@react-native-community/cli`](https://github.com/react-native-community/cli).
+# Web Lookup
 
-# Getting Started
+*I built a working text-only web browser inside a Supernote plugin*
 
-> **Note**: Make sure you have completed the [Set Up Your Environment](https://reactnative.dev/docs/set-up-your-environment) guide before proceeding.
+**[Download the latest release](https://github.com/Sparkinman/web-lookup-supernote-plugin/releases/latest)** — take the `.snplg` file and open it on the device.
 
-## Step 1: Start Metro
+I kept hitting the same wall reading on my Supernote: something in a book or in my own notes needs looking up, and the only way is to put the device down and pick up a phone. So I wrote a plugin. Lasso your handwriting, or select text in a book, and it becomes a web search — results come back as plain text you read on the page you were already on.
 
-First, you will need to run **Metro**, the JavaScript build tool for React Native.
+**It's a real browser, just without pictures.** Search DuckDuckGo, Wikipedia or Wiby, follow any result, read the page itself, page through more, or type an address by hand. Handwriting is recognised first, so lassoing your own scrawl searches what you meant.
 
-To start the Metro dev server, run the following command from the root of your React Native project:
+**Keeping what you find.** This is the part I use most, and there are four ways, all landing back in the note you started from:
 
-```sh
-# Using npm
-npm start
+- **A clipping** — a small pencil mark appears beside your handwriting. Tap it and the text unfolds on the page underneath; tap again and it folds away. No second page, no reopening the plugin. Move the writing and the mark follows it, even to another page.
+- **The text itself**, written into the note with a reference.
+- **A link** to the page you read. Tap it and it opens in the Supernote's own built-in browser — the plugin can't render a page, but the firmware can, so the link hands off to it.
+- **A screenshot** of what was on screen, saved and linked from your note.
 
-# OR using Yarn
-yarn start
-```
+In a book it works differently, because a plugin cannot write into a PDF or an EPUB. Instead the passage goes into **Supernote's own built-in Digest** — not a lookalike the plugin builds, the real one — with the excerpt pinned into the Digest's typed area and a link back to the exact spot in the book. That last part took a while: the device stores highlight offsets counted without newlines, so getting the link to land on the right sentence meant calibrating against digests the device had made itself.
 
-## Step 2: Build and run your app
+**The limits I hit, in case they save someone else the time:**
 
-With Metro running, open a new terminal window/pane from the root of your React Native project, and use one of the following commands to build and run your Android or iOS app:
+*You cannot show a web page.* Not with a WebView, not with a hand-written native view. PluginHost runs as a privileged system process and Android flatly refuses to create a WebView in one. Worse, the exception is thrown while the native view is being constructed, so it slips past React error boundaries and the JS error handler alike — the plugin window just opens and vanishes with nothing written anywhere. Everything is fetched over the network and rendered with ordinary React Native components instead.
 
-### Android
+*Most search engines are unreachable.* Google, Mojeek and Textise are all blocked or need JavaScript. DuckDuckGo's HTML endpoint works if you send a Lynx user agent. Wikipedia's API and Wiby work plainly.
 
-```sh
-# Using npm
-npm run android
+*A plugin cannot write into a book.* Every write is refused outright while a PDF or EPUB is in front, and the book's own markup file is locked while it is open and forbidden once it is closed — unreachable at all times. Hence the Digest route above.
 
-# OR using Yarn
-yarn android
-```
+**The nested-notes feature was the hard part.** I wanted a clipping you could fold into a small mark beside your handwriting and tap to open in place, instead of jumping to another page. Two things went wrong:
 
-### iOS
+It destroyed a page of handwriting — twice. Strokes you have just drawn live only in the note app's memory. An element write goes straight to the file, and the reload that must follow it replaces memory with disk, so anything unflushed dies. Seven strokes off a twenty-one element page, and the arithmetic matched exactly: the survivors were precisely the ones already saved. The fix is one call in the right place — flush *before* writing, never after, because saving afterwards pushes the plugin's stale cached page back over what you just wrote. Both orderings destroy a page; only one order is correct.
 
-For iOS, remember to install CocoaPods dependencies (this only needs to be run on first clone or after updating native deps).
+And you cannot attach anything to an element. `userData` is a documented string field on every note element. Write sixty-eight characters to it, read the element back, and it returns `uuid, type, layerNum, maxX, pageNum, thickness, maxY, recognizeResult, numInPage, textBox, status, contoursSrc, angles` — no `userData` at all. Before the text box or after, read singly or in a page listing: gone. So the clipping's text lives in the plugin's own storage and the mark is found by where it sits on the page, which means clippings don't travel with the `.note` to another device. There is genuinely nowhere in the file to put them.
 
-The first time you create a new project, run the Ruby bundler to install CocoaPods itself:
+**No account, no server.** Your search words go to the engine you picked and nowhere else. The Supernote sign-in is optional and only for the Digest; it talks to Supernote directly from the device and stores the session, never your password.
 
-```sh
-bundle install
-```
+Download and details: https://github.com/Sparkinman/web-lookup-supernote-plugin/releases/latest
 
-Then, and every time you update your native dependencies, run:
-
-```sh
-bundle exec pod install
-```
-
-For more information, please visit [CocoaPods Getting Started guide](https://guides.cocoapods.org/using/getting-started.html).
-
-```sh
-# Using npm
-npm run ios
-
-# OR using Yarn
-yarn ios
-```
-
-If everything is set up correctly, you should see your new app running in the Android Emulator, iOS Simulator, or your connected device.
-
-This is one way to run your app — you can also build it directly from Android Studio or Xcode.
-
-## Step 3: Modify your app
-
-Now that you have successfully run the app, let's make changes!
-
-Open `App.tsx` in your text editor of choice and make some changes. When you save, your app will automatically update and reflect these changes — this is powered by [Fast Refresh](https://reactnative.dev/docs/fast-refresh).
-
-When you want to forcefully reload, for example to reset the state of your app, you can perform a full reload:
-
-- **Android**: Press the <kbd>R</kbd> key twice or select **"Reload"** from the **Dev Menu**, accessed via <kbd>Ctrl</kbd> + <kbd>M</kbd> (Windows/Linux) or <kbd>Cmd ⌘</kbd> + <kbd>M</kbd> (macOS).
-- **iOS**: Press <kbd>R</kbd> in iOS Simulator.
-
-## Congratulations! :tada:
-
-You've successfully run and modified your React Native App. :partying_face:
-
-### Now what?
-
-- If you want to add this new React Native code to an existing application, check out the [Integration guide](https://reactnative.dev/docs/integration-with-existing-apps).
-- If you're curious to learn more about React Native, check out the [docs](https://reactnative.dev/docs/getting-started).
-
-# Troubleshooting
-
-If you're having issues getting the above steps to work, see the [Troubleshooting](https://reactnative.dev/docs/troubleshooting) page.
-
-# Learn More
-
-To learn more about React Native, take a look at the following resources:
-
-- [React Native Website](https://reactnative.dev) - learn more about React Native.
-- [Getting Started](https://reactnative.dev/docs/environment-setup) - an **overview** of React Native and how setup your environment.
-- [Learn the Basics](https://reactnative.dev/docs/getting-started) - a **guided tour** of the React Native **basics**.
-- [Blog](https://reactnative.dev/blog) - read the latest official React Native **Blog** posts.
-- [`@facebook/react-native`](https://github.com/facebook/react-native) - the Open Source; GitHub **repository** for React Native.
+It writes into your pages, so try it on a scratch note first. Bug reports welcome.
