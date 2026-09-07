@@ -336,7 +336,10 @@ export async function createDigest(token: string, digest: NewDigest): Promise<st
     // Empty strings rather than absent. A real row carries "" for each of
     // these, and a null is not the same thing to whatever renders them.
     parentUniqueIdentifier: digest.libraryUid ?? '',
-    commentStr: oneLine(digest.comment ?? ''),
+    // Not flattened. The passage above must be one line, because that is how
+    // the device stores a quotation; the note is prose about it and reads as a
+    // wall of text without its breaks.
+    commentStr: (digest.comment ?? '').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim(),
     commentHandwriteName: '',
     handwriteMD5: '',
     isSummaryGroup: 'N',
@@ -489,9 +492,20 @@ export async function addBookDigest(
   // web said about them is a note on that, which is what the typed section is
   // for. The other way round put a paragraph of search results where the
   // quotation belongs.
+  // Laid out rather than run together: what was found, then where this was
+  // looked up from, then the addresses, each on its own line. Joined with dashes
+  // it was one long paragraph in which none of the three could be picked out.
+  const note = [
+    found.trim(),
+    reference,
+    urls.length > 0 ? urls.join('\n') : '',
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+
   return createDigest(token, {
     content: selection,
-    comment: [found, reference, ...urls].filter(Boolean).join(' — '),
+    comment: note,
     sourcePath: bookPath,
     sourceType: SOURCE_DOCUMENT,
     page,

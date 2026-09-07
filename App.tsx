@@ -56,7 +56,6 @@ import {
   type Settings,
 } from './src/settings';
 import {addBookDigest, isExpired, sessionIsGood} from './src/cloud';
-import {probeBook, probeClosedBook, probePage} from './src/digestprobe';
 import {SettingsScreen} from './src/Settings';
 import {get, openExternally, WEB_AVAILABLE} from './src/web';
 import {
@@ -257,20 +256,9 @@ export default function App(): React.JSX.Element {
             `anchor: ${captured.fileName} page ${captured.source.page} ` +
               `note=${captured.isNote} rect=${JSON.stringify(captured.rect)}`,
           );
-          // Reads, changes nothing. A digest taken from a book belongs to the
-          // document rather than to any note, so a book is asked about its own
-          // markup and a note about its page.
-          if (captured.isNote) {
-            void probePage(captured.source.path, captured.source.page);
-            // The book is closed now, so its mark file is no longer locked.
-            // This is the only moment its markup can be read.
-            void probeClosedBook(settingsRef.current.lastBook);
-          } else {
-            void probeBook(captured.source.path, captured.source.page);
-            // Remembered so the page above has something to examine.
-            if (settingsRef.current.lastBook !== captured.source.path) {
-              changeRef.current({lastBook: captured.source.path});
-            }
+          // The last book is remembered because a book lookup needs to name it.
+          if (!captured.isNote && settingsRef.current.lastBook !== captured.source.path) {
+            changeRef.current({lastBook: captured.source.path});
           }
         } catch (err) {
           log(`anchor: unavailable (${err instanceof Error ? err.message : String(err)})`);

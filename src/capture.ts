@@ -199,17 +199,26 @@ export async function positionInPage(
       await PluginDocAPI.getCurrentDocText(page),
       'getCurrentDocText',
     );
-    // The selection comes back with line breaks the page text may not share, so
-    // both are flattened before looking one up in the other.
-    const flatten = (value: string) => value.replace(/\s+/g, ' ');
-    const haystack = flatten(text);
-    const needle = flatten(wanted);
-    const start = haystack.indexOf(needle);
-    if (start < 0) {
+    // Matched against the page as it really is, not against a flattened copy.
+    // The offsets are counted in the device's own text, so collapsing its
+    // whitespace first moves every one of them earlier -- by however many
+    // spaces and line breaks came before the passage, which over a page is
+    // enough to land the highlight well below where it belongs.
+    //
+    // The selection's own line breaks need not match the page's, so the
+    // passage is looked for with any run of whitespace allowed wherever it has
+    // one, and the offsets taken from where that lands in the original.
+    const escaped = wanted
+      .trim()
+      .split(/\s+/)
+      .map(word => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+      .join('\\s+');
+    const found = new RegExp(escaped).exec(text);
+    if (!found) {
       log('position: the selection was not found in the page text');
       return null;
     }
-    return {start, end: start + needle.length};
+    return {start: found.index, end: found.index + found[0].length};
   } catch (err) {
     log(`position: unavailable (${err instanceof Error ? err.message : String(err)})`);
     return null;
