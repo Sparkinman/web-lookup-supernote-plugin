@@ -44,6 +44,7 @@ import {
   type ClipSection,
 } from './src/clip';
 import {hostOf, parse, type Block, type Page} from './src/html';
+import {asAddress} from './src/url';
 import {log, LOG_AVAILABLE} from './src/log';
 import {DENIED, ensureFileWrite, ensureNetwork} from './src/permissions';
 import {DEFAULT_LENS, LENSES, lensById, resolve, type Lens} from './src/search';
@@ -261,6 +262,16 @@ export default function App(): React.JSX.Element {
     async (text: string, withLens: Lens) => {
       const trimmed = text.trim();
       if (!trimmed) {
+        return;
+      }
+      // An address goes where it says rather than being searched for. The box
+      // takes both because a second box, empty almost always, is worse.
+      const address = asAddress(trimmed);
+      if (address) {
+        log(`address: ${address}`);
+        setHistory([]);
+        setOffset(0);
+        await open(address);
         return;
       }
       log(`search: "${trimmed}" lens=${withLens.id}`);
@@ -892,7 +903,7 @@ export default function App(): React.JSX.Element {
           value={query}
           onChangeText={setQuery}
           onSubmitEditing={() => search(query, lensRef.current)}
-          placeholder="Write or type a search"
+          placeholder="Search, or type an address"
           returnKeyType="search"
           autoCorrect={false}
         />
@@ -1205,6 +1216,7 @@ const styles = StyleSheet.create({
     color: '#000',
   },
   lenses: {
+    flexWrap: 'wrap',
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 8,

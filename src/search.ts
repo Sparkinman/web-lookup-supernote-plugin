@@ -48,14 +48,14 @@ const encode = (q: string) => encodeURIComponent(q.trim());
 export const LENSES: Lens[] = [
   {
     id: 'quick',
-    label: 'Quick',
+    label: 'Top hit',
     url: q => `https://lite.duckduckgo.com/lite/?q=${encode(q)}`,
-    hint: 'Goes straight into the best match, skipping the list',
+    hint: 'DuckDuckGo, opened straight into the best match',
     followFirst: true,
   },
   {
     id: 'web',
-    label: 'Web',
+    label: 'DuckDuckGo',
     url: q => `https://lite.duckduckgo.com/lite/?q=${encode(q)}`,
     // `s` is the offset into the results. The lite page's own next-page control
     // is a form post carrying half a dozen hidden fields, but the offset alone
@@ -83,7 +83,7 @@ export const LENSES: Lens[] = [
   },
   {
     id: 'simple',
-    label: 'Simple',
+    label: 'Wiby',
     // Wiby deliberately indexes small, hand-made, text-first pages. A niche
     // index, but the lightest thing on this list by a wide margin and the
     // closest the modern web gets to reading like a book.

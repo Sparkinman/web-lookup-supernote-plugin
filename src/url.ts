@@ -100,3 +100,30 @@ export function queryParam(url: string, name: string): string {
     return match[1];
   }
 }
+
+
+/**
+ * A typed address, or nothing when what was typed is a search.
+ *
+ * The box takes both, because the alternative is a second box that is empty
+ * almost always. Telling them apart is a guess, so it is made a cautious one: a
+ * scheme settles it outright, and without one there must be no spaces and a dot
+ * followed by something that looks like a domain ending. "supernote.com" is an
+ * address; "note taking" and "1 Maccabees 4:8" are not, and neither is
+ * "e.g. this" -- which is why the part after the dot has to be letters.
+ */
+export function asAddress(typed: string): string | null {
+  const text = typed.trim();
+  if (!text || /\s/.test(text)) {
+    return null;
+  }
+  if (/^https?:\/\//i.test(text)) {
+    return text;
+  }
+  // A bare host, with or without a path: letters, then a dot, then a
+  // recognisable ending of two or more letters.
+  if (/^[\w-]+(\.[\w-]+)*\.[a-z]{2,}(\/|\?|$)/i.test(text)) {
+    return `https://${text}`;
+  }
+  return null;
+}
