@@ -59,6 +59,14 @@ export interface Settings {
   digestNote: string;
   /** Where clippings and screenshots are saved. */
   clipFolder: string;
+  /**
+   * The last book a lookup was started from.
+   *
+   * Remembered so its markup can be examined later, from somewhere the file is
+   * not locked. Not shown in settings: it is a note of where the user has been,
+   * not a preference.
+   */
+  lastBook: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -74,6 +82,7 @@ export const DEFAULT_SETTINGS: Settings = {
   notesLabel: 'Notes',
   digestNote: DEFAULT_DIGEST_NOTE,
   clipFolder: DEFAULT_CLIP_FOLDER,
+  lastBook: '',
 };
 
 /**
@@ -153,6 +162,7 @@ export async function loadSettings(): Promise<Settings> {
         typeof parsed.clipFolder === 'string' && parsed.clipFolder.trim()
           ? parsed.clipFolder.trim()
           : DEFAULT_SETTINGS.clipFolder,
+      lastBook: typeof parsed.lastBook === 'string' ? parsed.lastBook : '',
     };
   } catch (err) {
     log(`settings: could not read (${err instanceof Error ? err.message : String(err)})`);

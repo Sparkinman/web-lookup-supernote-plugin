@@ -164,6 +164,8 @@ export async function probePage(notePath: string, page: number): Promise<void> {
  * the local route is finished; if they are not, the format is right there.
  */
 export async function probeBook(bookPath: string, page: number): Promise<void> {
+  // eslint-disable-next-line no-void
+  void 0;
   log(`probe: looking at the book ${bookPath} page ${page}`);
 
   const markPath = `${bookPath}.mark`;
@@ -259,6 +261,94 @@ export async function probeBook(bookPath: string, page: number): Promise<void> {
       );
     } catch (err) {
       log(`probe: getElementCounts threw — ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+}
+
+
+/**
+ * Read a book's markup from somewhere the file is not held open.
+ *
+ * Asking the mark file for its elements while the book is on screen is refused
+ * with code 1206, "File is locked" -- which is a different answer from the 102
+ * "not allowed" that a note gets from inside a book, and a much better one. It
+ * says the path is right and the call is permitted, and that the only obstacle
+ * is the DOC app holding the file. Nothing holds it once the book is closed, so
+ * this runs from over a note, against the last book a lookup was started from.
+ *
+ * Read-only, like the rest of the probe.
+ */
+export async function probeClosedBook(bookPath: string): Promise<void> {
+  if (!bookPath) {
+    log('probe: no book has been looked up yet, nothing to examine');
+    return;
+  }
+  const markPath = `${bookPath}.mark`;
+  log(`probe: examining the closed book ${bookPath}`);
+
+  let marked: number[] = [];
+  try {
+    const response = (await PluginFileAPI.getMarkPages(bookPath)) as
+      | LooseResponse<number[]>
+      | null
+      | undefined;
+    if (response?.success && Array.isArray(response.result)) {
+      marked = response.result;
+      log(`probe: closed getMarkPages ok ${JSON.stringify(marked)}`);
+    } else {
+      log(`probe: closed getMarkPages refused ${JSON.stringify(response?.error ?? null)}`);
+    }
+  } catch (err) {
+    log(`probe: closed getMarkPages threw — ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  // Every marked page is worth a look, but only the first few: this runs while
+  // somebody is waiting for a search, and one digest is enough to read a format
+  // off. The document page number is tried alongside the index, since which the
+  // argument means is still unsettled.
+  const candidates: {label: string; index: number}[] = [];
+  marked.slice(0, 4).forEach((documentPage, index) => {
+    candidates.push({label: `mark index ${index} (page ${documentPage})`, index});
+    candidates.push({label: `document page ${documentPage}`, index: documentPage});
+  });
+
+  for (const candidate of candidates) {
+    try {
+      const response = (await PluginFileAPI.getElements(candidate.index, markPath)) as
+        | LooseResponse<Record<string, unknown>[]>
+        | null
+        | undefined;
+      if (!response?.success || !Array.isArray(response.result)) {
+        log(`probe: closed getElements(${candidate.label}) refused ${JSON.stringify(response?.error ?? null)}`);
+        continue;
+      }
+      const elements = response.result;
+      if (elements.length === 0) {
+        log(`probe: closed getElements(${candidate.label}) returned 0`);
+        continue;
+      }
+      log(
+        `probe: closed getElements(${candidate.label}) returned ${elements.length}, ` +
+          `types [${elements.map(e => e?.type).join(',')}]`,
+      );
+      for (const element of elements) {
+        const box = element?.textBox as Record<string, unknown> | undefined;
+        const link = element?.link as Record<string, unknown> | undefined;
+        if (box) {
+          log(`probe: CLOSED TEXT BOX ${JSON.stringify(box).slice(0, 900)}`);
+          const data = typeof box.textDigestData === 'string' ? box.textDigestData : '';
+          if (data) {
+            describe('probe: CLOSED DIGEST DATA', data);
+          }
+        }
+        if (link) {
+          log(`probe: CLOSED LINK ${JSON.stringify(link).slice(0, 500)}`);
+        }
+      }
+      // One page carrying real elements is all that is needed.
+      return;
+    } catch (err) {
+      log(`probe: closed getElements(${candidate.label}) threw — ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 }

@@ -53,7 +53,7 @@ import {
   saveSettings,
   type Settings,
 } from './src/settings';
-import {probeBook, probePage} from './src/digestprobe';
+import {probeBook, probeClosedBook, probePage} from './src/digestprobe';
 import {SettingsScreen} from './src/Settings';
 import {get, openExternally, WEB_AVAILABLE} from './src/web';
 import {
@@ -113,6 +113,14 @@ export default function App(): React.JSX.Element {
   const lensRef = useRef<Lens>(DEFAULT_LENS);
   /** Settings, likewise, for the callbacks that run before state has caught up. */
   const settingsRef = useRef<Settings>(DEFAULT_SETTINGS);
+  /**
+   * A stable handle on `change`, for the same reason.
+   *
+   * startFromButton is registered once as a button listener; depending on
+   * `change` directly would rebuild it on every settings write and re-register
+   * the listener with it.
+   */
+  const changeRef = useRef<(patch: Partial<Settings>) => void>(() => {});
 
   /** Change lens everywhere at once: on screen, for the next lookup, and on disk. */
   const chooseLens = useCallback((next: Lens) => {
@@ -135,6 +143,7 @@ export default function App(): React.JSX.Element {
       return updated;
     });
   }, []);
+  changeRef.current = change;
 
   /**
    * Fetch a URL and show it.
@@ -242,8 +251,15 @@ export default function App(): React.JSX.Element {
           // markup and a note about its page.
           if (captured.isNote) {
             void probePage(captured.source.path, captured.source.page);
+            // The book is closed now, so its mark file is no longer locked.
+            // This is the only moment its markup can be read.
+            void probeClosedBook(settingsRef.current.lastBook);
           } else {
             void probeBook(captured.source.path, captured.source.page);
+            // Remembered so the page above has something to examine.
+            if (settingsRef.current.lastBook !== captured.source.path) {
+              changeRef.current({lastBook: captured.source.path});
+            }
           }
         } catch (err) {
           log(`anchor: unavailable (${err instanceof Error ? err.message : String(err)})`);
