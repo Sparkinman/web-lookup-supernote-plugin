@@ -25,6 +25,15 @@ export interface Lens {
   url(query: string): string;
   /** Shown under the search box so the behaviour is not a surprise. */
   hint: string;
+  /**
+   * Open the first result instead of showing the list.
+   *
+   * Replaces DuckDuckGo's `!ducky` bang, which cannot work here: that redirect
+   * is performed by a script on the page, and this reader fetches HTML rather
+   * than running it. Following the first link of a fetched result list reaches
+   * the same place without needing a browser.
+   */
+  followFirst?: boolean;
 }
 
 const encode = (q: string) => encodeURIComponent(q.trim());
@@ -33,13 +42,9 @@ export const LENSES: Lens[] = [
   {
     id: 'quick',
     label: 'Quick',
-    // !ducky is DuckDuckGo's "first result" bang: it skips the result list and
-    // lands on the page itself. The redirect is driven by a small script rather
-    // than an HTTP 3xx, so it needs JavaScript enabled in the WebView — which
-    // it is. Worth knowing when debugging: fetching this URL with curl returns
-    // a 573-byte redirect stub, not the destination.
-    url: q => `https://duckduckgo.com/?q=${encode('!ducky ' + q)}`,
+    url: q => `https://lite.duckduckgo.com/lite/?q=${encode(q)}`,
     hint: 'Opens the top result directly',
+    followFirst: true,
   },
   {
     id: 'web',
@@ -50,11 +55,16 @@ export const LENSES: Lens[] = [
   {
     id: 'wikipedia',
     label: 'Wikipedia',
-    // Special:Search resolves straight to the article when the query matches a
-    // title, and shows results when it does not — so one URL covers both
-    // "look up this term" and "find something about this".
-    url: q => `https://en.m.wikipedia.org/wiki/Special:Search?search=${encode(q)}`,
-    hint: 'Jumps to the article when the title matches',
+    // Read through the API rather than the site. Special:Search redirects to
+    // the desktop layout and returns some seventy kilobytes of navigation
+    // wrapped around the prose; this returns the same articles as plain text,
+    // already free of markup, and covers both "look up this term" and "find
+    // something about this" in one request.
+    url: q =>
+      'https://en.wikipedia.org/w/api.php?action=query&format=json&formatversion=2' +
+      `&generator=search&gsrsearch=${encode(q)}&gsrlimit=8` +
+      '&prop=extracts&exintro=1&explaintext=1',
+    hint: 'Article summaries, as plain text',
   },
   {
     id: 'simple',

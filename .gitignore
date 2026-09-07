@@ -73,3 +73,8 @@ yarn-error.log
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
+
+# Built plugin packages
+# Rebuildable from source by buildPlugin.sh, and ~7MB each — a backup of the
+# source should not carry a new copy of the binary for every version bump.
+*.snplg

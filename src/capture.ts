@@ -8,6 +8,8 @@
 
 import {PluginCommAPI, PluginDocAPI, PluginNoteAPI} from 'sn-plugin-lib';
 
+import {log, step} from './log';
+
 /**
  * Most PluginCommAPI methods are declared `Promise<Object | null | undefined>`
  * rather than APIResponse<T>, so the response shape has to be narrowed by hand.
@@ -59,8 +61,10 @@ export async function readLassoAsQuery(): Promise<string> {
   const typed: string[] = [];
 
   try {
-    const textBoxes = unwrap<{textContentFull?: string | null}[]>(
-      await PluginNoteAPI.getLassoText(),
+    const textBoxes = unwrap<
+      {textContentFull?: string | null; textDigestData?: string | null}[]
+    >(
+      await step('getLassoText', () => PluginNoteAPI.getLassoText()),
       'getLassoText',
     );
     for (const box of textBoxes) {
@@ -68,6 +72,14 @@ export async function readLassoAsQuery(): Promise<string> {
       const value = box?.textContentFull;
       if (value) {
         typed.push(value);
+      }
+      // Logged in full, untruncated, because its format is undocumented.
+      // `insertText` accepts a textDigestData string, which is what turns a
+      // plain text box into a digest excerpt (element type 501/502) — but the
+      // SDK never says what belongs in it. One real example read back off the
+      // device settles it.
+      if (box?.textDigestData) {
+        log(`DIGEST DATA: ${box.textDigestData}`);
       }
     }
   } catch {
@@ -78,7 +90,10 @@ export async function readLassoAsQuery(): Promise<string> {
     return clamp(normalize(typed.join(' ')));
   }
 
-  const elements = unwrap<object[]>(await PluginCommAPI.getLassoElements(), 'getLassoElements');
+  const elements = unwrap<object[]>(
+    await step('getLassoElements', () => PluginCommAPI.getLassoElements()),
+    'getLassoElements',
+  );
   if (elements.length === 0) {
     throw new Error('Nothing selected.');
   }
@@ -91,12 +106,12 @@ export async function readLassoAsQuery(): Promise<string> {
   // Passing the rect makes the firmware throw `unknown pageSize` and recognition
   // fails outright.
   const size = unwrap<{width: number; height: number}>(
-    await PluginCommAPI.getPageDisplaySize(),
+    await step('getPageDisplaySize', () => PluginCommAPI.getPageDisplaySize()),
     'getPageDisplaySize',
   );
 
   const recognized = unwrap<string>(
-    await PluginCommAPI.recognizeElements(elements, size),
+    await step('recognizeElements', () => PluginCommAPI.recognizeElements(elements, size)),
     'recognizeElements',
   );
 
@@ -116,7 +131,7 @@ export async function readLassoAsQuery(): Promise<string> {
  */
 export async function readDocSelectionAsQuery(): Promise<string> {
   const selected = unwrap<string>(
-    await PluginDocAPI.getLastSelectedText(),
+    await step('getLastSelectedText', () => PluginDocAPI.getLastSelectedText()),
     'getLastSelectedText',
   );
   const query = clamp(normalize(selected));
@@ -126,14 +141,147 @@ export async function readDocSelectionAsQuery(): Promise<string> {
   return query;
 }
 
+/**
+ * The query as it should actually be searched, given where it came from.
+ *
+ * A sentence lifted out of a book frequently means nothing standing alone -- a
+ * line of scripture, a term of art, a character's name -- and searching it
+ * beside the book's title is the difference between finding the passage and
+ * finding a stranger who happened to use the same words. The same context ruins
+ * a lookup of a word that only needed defining, which is why this is driven by
+ * a setting rather than applied whenever a book is open.
+ *
+ * Notes are never given the treatment: the file name of a note is a date or a
+ * heading, and neither says anything useful about what was written on it.
+ */
+export function withBookContext(
+  query: string,
+  anchor: Anchor | null,
+  include: boolean,
+): string {
+  if (!include || !anchor || anchor.isNote || !anchor.fileName) {
+    return query;
+  }
+  return clamp(normalize(`${anchor.fileName} ${query}`));
+}
+
 /** Where a lookup was started from, so a result can be written back to it. */
 export interface SourceRef {
   path: string;
   page: number;
 }
 
+export interface Rect {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+/**
+ * Everything needed to attach something to the handwriting later.
+ *
+ * Captured at mount, while the lasso is still live. By the time the reader has
+ * been browsed the lasso may well be gone, and `getLassoRect` would then have
+ * nothing to report — but `insertTextLink` takes an explicit rectangle, so a
+ * rectangle read now still works minutes later.
+ */
+export interface Anchor {
+  source: SourceRef;
+  rect: Rect | null;
+  /** Page bounds, so anything placed beside the writing stays on the page. */
+  pageSize: {width: number; height: number} | null;
+  /** The file's own name, cited on the clipping so a lookup keeps its origin. */
+  fileName: string;
+  /**
+   * Whether the lookup started in a note.
+   *
+   * Documents accept no text boxes and no links, so nothing can be written back
+   * into a PDF or an EPUB. Worth knowing before offering the button rather than
+   * after the device refuses it.
+   */
+  isNote: boolean;
+}
+
 export async function currentSource(): Promise<SourceRef> {
-  const path = unwrap<string>(await PluginCommAPI.getCurrentFilePath(), 'getCurrentFilePath');
-  const page = unwrap<number>(await PluginCommAPI.getCurrentPageNum(), 'getCurrentPageNum');
+  const path = unwrap<string>(
+    await step('getCurrentFilePath', () => PluginCommAPI.getCurrentFilePath()),
+    'getCurrentFilePath',
+  );
+  const page = unwrap<number>(
+    await step('getCurrentPageNum', () => PluginCommAPI.getCurrentPageNum()),
+    'getCurrentPageNum',
+  );
   return {path, page};
+}
+
+/**
+ * The lasso's bounds, or null when there is no usable selection.
+ *
+ * An empty rectangle is treated as no rectangle: `insertTextLink` requires a
+ * non-zero area and fails without saying why, so a degenerate rect is worth
+ * discarding here rather than passing on.
+ */
+export async function lassoRect(): Promise<Rect | null> {
+  try {
+    const rect = unwrap<Rect>(
+      await step('getLassoRect', () => PluginCommAPI.getLassoRect()),
+      'getLassoRect',
+    );
+    if (rect.right - rect.left <= 0 || rect.bottom - rect.top <= 0) {
+      return null;
+    }
+    return rect;
+  } catch {
+    return null;
+  }
+}
+
+/** Read the anchor while the lasso still exists. */
+export async function captureAnchor(): Promise<Anchor> {
+  const [source, rect, pageSize] = await Promise.all([
+    currentSource(),
+    lassoRect(),
+    pageDisplaySize(),
+  ]);
+  return {
+    source,
+    rect,
+    pageSize,
+    fileName: baseName(source.path),
+    isNote: /\.note$/i.test(source.path),
+  };
+}
+
+/** The file's name without its directory or extension. */
+export function baseName(path: string): string {
+  const last = path.split('/').pop() ?? path;
+  return last.replace(/\.[^.]+$/, '');
+}
+
+/**
+ * How a lookup's origin is cited on the clipping.
+ *
+ * Pages are numbered from zero internally and from one everywhere a person
+ * reads them.
+ */
+export function reference(anchor: Anchor | null): string {
+  if (!anchor) {
+    return '';
+  }
+  // Named as a book when it is one: "From Bible, page 3696" reads as a citation,
+  // which is what it is, where a bare filename reads as a file path.
+  const what = anchor.isNote ? 'note' : 'book';
+  return `From ${what} "${anchor.fileName}", page ${anchor.source.page + 1}`;
+}
+
+async function pageDisplaySize(): Promise<{width: number; height: number} | null> {
+  try {
+    return unwrap<{width: number; height: number}>(
+      await PluginCommAPI.getPageDisplaySize(),
+      'getPageDisplaySize',
+    );
+  } catch {
+    return null;
+  }
 }

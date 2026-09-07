@@ -642,8 +642,22 @@ new_zip_package() {
 
     if command -v zip >/dev/null 2>&1; then
         (cd "$source_dir" && zip -r "$destination_path" .) && write_color_output "Zip created: $destination_path" "Green" || { write_color_output "Failed to create zip" "Red"; return 1; }
+    elif command -v python3 >/dev/null 2>&1; then
+        # No zip binary on this machine. A .snplg is an ordinary zip, and
+        # python3 is already required by the reactPackages step above, so it
+        # can do the packaging rather than the build failing for want of a
+        # tool that adds nothing the standard library lacks.
+        python3 - "$source_dir" "$destination_path" <<'PYZIP' && write_color_output "Zip created: $destination_path (python3)" "Green" || { write_color_output "Failed to create zip" "Red"; return 1; }
+import os, sys, zipfile
+source, destination = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as archive:
+    for root, _, names in os.walk(source):
+        for name in names:
+            full = os.path.join(root, name)
+            archive.write(full, os.path.relpath(full, source))
+PYZIP
     else
-        write_color_output "zip command not found" "Red"; return 1
+        write_color_output "neither zip nor python3 found" "Red"; return 1
     fi
     return 0
 }

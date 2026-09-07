@@ -9,13 +9,17 @@
  */
 
 import {AppRegistry, Image} from 'react-native';
-import App from './App';
+import Root from './src/Root';
 import {name as appName} from './app.json';
 
 import {PluginManager} from 'sn-plugin-lib';
+import {versionName, versionCode} from './PluginConfig.json';
+import {log, startSession} from './src/log';
 
 // MUST come before PluginManager.init() — init depends on the registered component.
-AppRegistry.registerComponent(appName, () => App);
+// Root wraps the panel in an error boundary so a crash shows on the device
+// instead of the window silently closing.
+AppRegistry.registerComponent(appName, () => Root);
 
 PluginManager.init();
 
@@ -25,17 +29,40 @@ PluginManager.init();
 // how `adb logcat -s ReactNativeJS` confirms which build is actually running,
 // and it catches the stale-reinstall trap (the host reinstalls from its own
 // managed copy under MyStyle/Plugins/, not from what you pushed to MyStyle/).
-console.log('[LookUp] starting');
+console.log(`[LookUp] v${versionName} (code ${versionCode}) starting`);
+startSession(`v${versionName} (code ${versionCode}) starting`);
+
+// Errors outside a render pass — a rejected promise, a native callback — never
+// reach the boundary, so they get logged here rather than disappearing.
+const previousHandler = global.ErrorUtils?.getGlobalHandler?.();
+global.ErrorUtils?.setGlobalHandler?.((err, isFatal) => {
+  log(`uncaught${isFatal ? ' (fatal)' : ''}: ${err?.message}\n${err?.stack}`);
+  previousHandler?.(err, isFatal);
+});
 
 const ICON = Image.resolveAssetSource(require('./assets/icon.png')).uri;
 
 // Buttons are localised by passing a JSON string rather than a plain one; a
 // plain string shows that literal text whatever the device language is set to.
 const LABEL = JSON.stringify({
-  en: 'Look up',
-  zh_CN: '查找',
-  zh_TW: '查找',
-  ja: '検索',
+  en: 'Web Lookup',
+  zh_CN: '网页查找',
+  zh_TW: '網頁查找',
+  ja: 'ウェブ検索',
+});
+
+/**
+ * Toolbar button (type 1), NOTE and DOC.
+ *
+ * Opens the panel with nothing selected, so a search can be started by writing
+ * one into the box. This is also the only entry point that does not require
+ * setting up a selection first, which makes it the practical one for testing.
+ */
+PluginManager.registerButton(1, ['NOTE', 'DOC'], {
+  id: 100,
+  name: LABEL,
+  icon: ICON,
+  showType: 1,
 });
 
 /**
@@ -76,12 +103,38 @@ PluginManager.registerButton(3, ['DOC'], {
  */
 let pendingButtonId = null;
 
+/**
+ * Notified when a button is pressed while the panel is already open.
+ *
+ * The panel is only mounted once: pressing the lasso button again does not
+ * remount it, so without this a second lookup would leave the first one's
+ * results on screen with no sign anything had happened.
+ */
+let subscriber = null;
+
 PluginManager.registerButtonListener({
   onButtonPress(event) {
-    pendingButtonId = event?.id ?? null;
-    console.log(`[LookUp] button ${pendingButtonId} pressed`);
+    const id = event?.id ?? null;
+    pendingButtonId = id;
+    log(`button ${id} pressed (pressEvent=${event?.pressEvent})`);
+    if (subscriber) {
+      // Consumed here rather than left pending: the panel is already listening,
+      // and a leftover id would be picked up again by the next mount.
+      pendingButtonId = null;
+      subscriber(id);
+    }
   },
 });
+
+/** Subscribe to presses that arrive while the panel is mounted. */
+export const onButtonPress = callback => {
+  subscriber = callback;
+  return () => {
+    if (subscriber === callback) {
+      subscriber = null;
+    }
+  };
+};
 
 /** Read and clear the pending id. Call once, from App's mount effect. */
 export const takePendingButton = () => {

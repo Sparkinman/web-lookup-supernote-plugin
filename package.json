@@ -1,6 +1,7 @@
 {
   "name": "snlookup",
-  "version": "0.0.1",
+  "version": "2.1.0",
+  "description": "Look up a selection on the web from a Supernote note, book or PDF, and keep what matters.",
   "private": true,
   "scripts": {
     "android": "react-native run-android",
@@ -12,7 +13,6 @@
   "dependencies": {
     "react": "19.0.0",
     "react-native": "0.79.2",
-    "react-native-webview": "^16.0.0",
     "sn-plugin-lib": "0.1.65"
   },
   "devDependencies": {
