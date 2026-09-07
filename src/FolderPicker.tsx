@@ -42,12 +42,44 @@ export function FolderPicker({
     }
   }, []);
 
+  /**
+   * Open on somewhere there is something to see.
+   *
+   * The configured folder is the obvious place to start and is often the worst
+   * one: a save location that has not been used yet does not exist, and the
+   * browser opened on an empty list with no indication that anywhere else
+   * existed. Walk up until a folder with something in it is found, and settle
+   * for the root of internal storage, which always has.
+   */
+  const openOn = useCallback(
+    async (wanted: string) => {
+      let candidate = wanted;
+      for (let step = 0; step < 6; step += 1) {
+        const found = await listDirs(candidate);
+        if (found.length > 0) {
+          setPath(candidate);
+          setDirs(found);
+          return;
+        }
+        if (!candidate) {
+          break;
+        }
+        candidate = candidate.includes('/')
+          ? candidate.slice(0, candidate.lastIndexOf('/'))
+          : '';
+      }
+      setPath(candidate);
+      void load(candidate);
+    },
+    [load],
+  );
+
   useEffect(() => {
     if (visible) {
-      setPath(initialPath);
-      void load(initialPath);
+      setBusy(true);
+      void openOn(initialPath).finally(() => setBusy(false));
     }
-  }, [visible, initialPath, load]);
+  }, [visible, initialPath, openOn]);
 
   if (!visible) {
     return null;

@@ -16,6 +16,9 @@ interface SettingsNative {
   write(contents: string): Promise<string>;
   listDirs(relativePath: string): Promise<string[]>;
   makeDirs(relativePath: string): Promise<string>;
+  queueAppend(entryJson: string): Promise<string>;
+  queueRead(): Promise<string>;
+  queueClear(): Promise<boolean>;
 }
 
 const native: SettingsNative | undefined = NativeModules.LookUpSettings;
@@ -168,6 +171,73 @@ export async function saveSettings(settings: Settings): Promise<void> {
     await native.write(JSON.stringify(settings, null, 2));
   } catch (err) {
     log(`settings: could not save (${err instanceof Error ? err.message : String(err)})`);
+  }
+}
+
+/**
+ * An excerpt waiting to be written into the digest note.
+ *
+ * Everything the write will need, since by the time it happens the book will be
+ * closed and none of it can be read again.
+ */
+export interface PendingExcerpt {
+  reference: string;
+  text: string;
+  urls: string[];
+  /** The drawn clipping, or empty when pictures are turned off. */
+  imagePath: string;
+  imageWidth: number;
+  imageHeight: number;
+  /** The book, so the digest can link back into it. */
+  bookPath: string;
+  bookPage: number;
+  bookName: string;
+}
+
+/** Park an excerpt until a note is open and it can be written. */
+export async function queueExcerpt(entry: PendingExcerpt): Promise<boolean> {
+  if (!native?.queueAppend) {
+    return false;
+  }
+  try {
+    await native.queueAppend(JSON.stringify(entry));
+    return true;
+  } catch (err) {
+    log(`digest: could not queue (${err instanceof Error ? err.message : String(err)})`);
+    return false;
+  }
+}
+
+/** Everything waiting, oldest first. */
+export async function readQueue(): Promise<PendingExcerpt[]> {
+  if (!native?.queueRead) {
+    return [];
+  }
+  try {
+    const raw = await native.queueRead();
+    return raw
+      .split('\n')
+      .map(line => line.trim())
+      .filter(Boolean)
+      .map(line => {
+        try {
+          return JSON.parse(line) as PendingExcerpt;
+        } catch {
+          return null;
+        }
+      })
+      .filter((entry): entry is PendingExcerpt => Boolean(entry));
+  } catch (err) {
+    log(`digest: could not read the queue (${err instanceof Error ? err.message : String(err)})`);
+    return [];
+  }
+}
+
+export async function clearQueue(): Promise<void> {
+  try {
+    await native?.queueClear?.();
+  } catch (err) {
+    log(`digest: could not clear the queue (${err instanceof Error ? err.message : String(err)})`);
   }
 }
 

@@ -510,6 +510,34 @@ async function save(): Promise<void> {
 }
 
 /**
+ * Whether note files can be reached at all from wherever the plugin is running.
+ *
+ * The firmware gates PluginFileAPI on the app in the foreground, not on the
+ * plugin's permissions: with a book in front every call is refused with code
+ * 102, reads included -- `getNoteTotalPageNum` on an existing note comes back
+ * "This app is not allowed to use this API". So there is no arrangement of
+ * arguments, and no note created in advance, that lets a book lookup write
+ * anything. This asks the cheapest read there is and believes the answer.
+ */
+export async function notesReachable(notePath: string): Promise<boolean> {
+  try {
+    const response = (await PluginFileAPI.getNoteTotalPageNum(notePath)) as
+      | LooseResponse<number>
+      | null
+      | undefined;
+    // A missing note answers with a different failure than a forbidden one, and
+    // only the forbidden one means "not from here".
+    const message = response?.error?.message ?? '';
+    const forbidden = /not allowed to use this API/i.test(message);
+    log(`digest: notes reachable=${!forbidden} (${message || 'no error'})`);
+    return !forbidden;
+  } catch (err) {
+    log(`digest: reachability threw — ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
+}
+
+/**
  * Draw a clipping and hand back the file, without touching any note.
  *
  * Separated from attachClip because a digest entry needs the picture as an
@@ -556,9 +584,16 @@ export async function drawClip(request: {
  * Returns null on success, or a reason.
  */
 export async function appendDigest(
-  anchor: Anchor,
+  entry: {
+    reference: string;
+    text: string;
+    urls: string[];
+    image: Drawn | null;
+    bookPath: string;
+    bookPage: number;
+    bookName: string;
+  },
   notePath: string,
-  entry: {reference: string; text: string; urls: string[]; image: Drawn | null},
 ): Promise<string | null> {
   const page = await freshPage(notePath);
   if (typeof page === 'string') {
@@ -590,8 +625,8 @@ export async function appendDigest(
       // 2 is a document link. destPage is the book's own page index, so this
       // reopens the PDF where the selection was made rather than at its start.
       linkType: 2,
-      destPath: anchor.source.path,
-      destPage: anchor.source.page,
+      destPath: entry.bookPath,
+      destPage: entry.bookPage,
       fullText: backLabel,
       showText: backLabel,
       italic: 0,
@@ -621,8 +656,8 @@ export async function appendDigest(
       textContentFull: text,
       textRect: {left: MARGIN, top: textTop, right: width - MARGIN, bottom: textBottom},
       textDigestData: JSON.stringify({
-        source: anchor.fileName,
-        page: anchor.source.page,
+        source: entry.bookName,
+        page: entry.bookPage,
         urls: tidy(entry.urls),
       }),
       textAlign: 0,
@@ -726,13 +761,6 @@ async function freshPage(notePath: string): Promise<number | string> {
         last = err instanceof Error ? err.message : 'an unknown error';
       }
       log(`digest: createNote rejected template "${template}" — ${last}`);
-    }
-    if (/not allowed to use this API/i.test(last)) {
-      // The firmware gates writes on the app in front, not on the plugin: from
-      // inside a book, creating a note is refused whatever template is offered.
-      // Writing into a note that already exists is a separate permission and
-      // may well be allowed, so say the one thing that might make this work.
-      return `this device will not let a plugin create a note while a book is open — make ${notePath} once in the Note app and this will append to it`;
     }
     return `the lookup note could not be created (${last})`;
   }

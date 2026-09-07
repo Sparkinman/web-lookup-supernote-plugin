@@ -106,8 +106,77 @@ class SettingsModule(reactContext: ReactApplicationContext) :
     }
   }
 
+  /**
+   * Add one excerpt to the queue of things waiting to reach the digest note.
+   *
+   * Needed because a plugin may not touch a note file at all while a book is in
+   * front: every PluginFileAPI call, reads included, comes back "This app is
+   * not allowed to use this API" (code 102). An excerpt taken from a book
+   * therefore cannot be written when it is taken, so it is parked here and
+   * written the next time the plugin runs with a note open.
+   *
+   * One JSON object per line, appended and closed immediately, so a crash costs
+   * at most the entry being written rather than the whole queue.
+   */
+  @ReactMethod
+  fun queueAppend(entryJson: String, promise: Promise) {
+    try {
+      val file = queueFile()
+      val dir = file.parentFile
+      if (dir != null && !dir.exists() && !dir.mkdirs()) {
+        promise.reject("QUEUE_FAILED", "Could not create ${dir.absolutePath}")
+        return
+      }
+      file.appendText(entryJson.replace("\n", " ") + "\n", Charsets.UTF_8)
+      LogFile.append("digest: queued an excerpt in ${file.absolutePath}")
+      promise.resolve(file.absolutePath)
+    } catch (t: Throwable) {
+      LogFile.append("digest: queue failed $t")
+      promise.reject("QUEUE_FAILED", t.message ?: t.toString(), t)
+    }
+  }
+
+  /** Everything waiting, oldest first, one JSON object per line. */
+  @ReactMethod
+  fun queueRead(promise: Promise) {
+    try {
+      val file = queueFile()
+      if (!file.exists() || !file.canRead()) {
+        promise.resolve("")
+        return
+      }
+      promise.resolve(file.readText(Charsets.UTF_8))
+    } catch (t: Throwable) {
+      LogFile.append("digest: queue read failed $t")
+      promise.reject("QUEUE_READ_FAILED", t.message ?: t.toString(), t)
+    }
+  }
+
+  /**
+   * Empty the queue.
+   *
+   * Truncated rather than deleted: removing a file needs FILE:DELETE, which
+   * this plugin does not ask for.
+   */
+  @ReactMethod
+  fun queueClear(promise: Promise) {
+    try {
+      val file = queueFile()
+      if (file.exists()) {
+        file.writeText("", Charsets.UTF_8)
+      }
+      promise.resolve(true)
+    } catch (t: Throwable) {
+      promise.reject("QUEUE_CLEAR_FAILED", t.message ?: t.toString(), t)
+    }
+  }
+
+  private fun queueFile(): File =
+      File(File(Environment.getExternalStorageDirectory(), DIR), QUEUE)
+
   companion object {
     private const val DIR = "Document/LookUp"
     private const val FILE = "settings.json"
+    private const val QUEUE = "pending-digest.jsonl"
   }
 }

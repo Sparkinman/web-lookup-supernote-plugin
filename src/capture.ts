@@ -269,10 +269,15 @@ export function reference(anchor: Anchor | null): string {
   if (!anchor) {
     return '';
   }
-  // Named as a book when it is one: "From Bible, page 3696" reads as a citation,
-  // which is what it is, where a bare filename reads as a file path.
-  const what = anchor.isNote ? 'note' : 'book';
-  return `From ${what} "${anchor.fileName}", page ${anchor.source.page + 1}`;
+  // A book is named and left at that. The page number available here is the
+  // index into the PDF, which for a book of any size is not the page number
+  // printed on the page -- citing "page 3697" of a Bible is worse than saying
+  // nothing, because it looks like it means something. A note's page is its
+  // real page, so it keeps one.
+  if (!anchor.isNote) {
+    return `From book "${anchor.fileName}"`;
+  }
+  return `From note "${anchor.fileName}", page ${anchor.source.page + 1}`;
 }
 
 async function pageDisplaySize(): Promise<{width: number; height: number} | null> {

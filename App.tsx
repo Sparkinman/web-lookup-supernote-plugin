@@ -37,6 +37,7 @@ import {
 import {
   appendDigest,
   attachClip,
+  notesReachable,
   attachScreenshot,
   CLIP_AVAILABLE,
   drawClip,
@@ -49,9 +50,12 @@ import {DENIED, ensureFileWrite, ensureNetwork} from './src/permissions';
 import {DEFAULT_LENS, LENSES, lensById, resolve, type Lens} from './src/search';
 import {
   captureMode,
+  clearQueue,
   DEFAULT_SETTINGS,
   labelOr,
   loadSettings,
+  queueExcerpt,
+  readQueue,
   saveSettings,
   type Settings,
 } from './src/settings';
@@ -291,6 +295,8 @@ export default function App(): React.JSX.Element {
       lensRef.current = remembered;
       setLens(remembered);
       log(`settings: lens=${loaded.lens} bookQuery=${loaded.bookQuery}`);
+      // Before anything else a lookup might overwrite on screen.
+      void flushDigest(loaded.digestNote);
       if (fromConfig) {
         // Opened to be configured, not to look anything up. Starting a lookup
         // as well would put a search behind the settings for no reason.
@@ -302,6 +308,58 @@ export default function App(): React.JSX.Element {
     // Deliberately once: this is the "why did the panel open" step, and
     // re-running it on every change of startFromButton would repeat the lookup.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /**
+   * Write anything held from a book into the digest note.
+   *
+   * Runs on every mount and simply gives up quietly when notes are out of
+   * reach, which is the case whenever a book is the app in front. The excerpts
+   * were drawn when they were taken, so nothing here needs the book.
+   */
+  const flushDigest = useCallback(async (notePath: string) => {
+    const waiting = await readQueue();
+    if (waiting.length === 0) {
+      return;
+    }
+    if (!(await notesReachable(notePath))) {
+      log(`digest: ${waiting.length} excerpt(s) still held, notes out of reach`);
+      return;
+    }
+    let written = 0;
+    for (const entry of waiting) {
+      const failure = await appendDigest(
+        {
+          reference: entry.reference,
+          text: entry.text,
+          urls: entry.urls,
+          image: entry.imagePath
+            ? {path: entry.imagePath, width: entry.imageWidth, height: entry.imageHeight}
+            : null,
+          bookPath: entry.bookPath,
+          bookPage: entry.bookPage,
+          bookName: entry.bookName,
+        },
+        notePath,
+      );
+      if (failure) {
+        log(`digest: held excerpt could not be written — ${failure}`);
+        // Left in the queue rather than dropped: a failure here is usually the
+        // note being busy, and losing somebody's reading to tidiness is worse
+        // than writing it twice.
+        return;
+      }
+      written += 1;
+    }
+    if (written > 0) {
+      await clearQueue();
+      log(`digest: wrote ${written} held excerpt(s) into ${notePath}`);
+      setStatus(
+        written === 1
+          ? 'One held excerpt went into your digest.'
+          : `${written} held excerpts went into your digest.`,
+      );
+    }
   }, []);
 
   /** Later presses, while the panel is already up. */
@@ -411,35 +469,69 @@ export default function App(): React.JSX.Element {
       // limit on digests -- the firmware's own digest does not write into the
       // PDF either, it collects excerpts into a note -- so a book takes the
       // same route by a different API.
-      const failure = anchor.isNote
-        ? await insertPassages(anchor, text, {
-            reference: reference(anchor),
-            urls: chosenUrls(),
+      let failure: string | null;
+      if (anchor.isNote) {
+        failure = await insertPassages(anchor, text, {
+          reference: reference(anchor),
+          urls: chosenUrls(),
+        });
+      } else {
+        // A book cannot be written into, and neither can a note while a book is
+        // the app in front -- the firmware refuses every PluginFileAPI call,
+        // reads included, with code 102. So the excerpt is drawn now, while the
+        // selection and the clipping still exist, and parked; it is written
+        // into the digest note the next time the plugin runs over a note.
+        const image = !settings.savePicture
+          ? null
+          : await drawClip({
+              title: page.title || query,
+              folder: settings.clipFolder,
+              source: [reference(anchor), page.viewerUrl ?? url ?? '']
+                .filter(Boolean)
+                .join('\n'),
+              sections: order
+                .map(i => page.blocks[i])
+                .filter((block): block is Block => Boolean(block))
+                .map(block => ({
+                  heading: block.text,
+                  url: block.href ?? '',
+                  body: block.detail ?? '',
+                })),
+            });
+
+        const entry = {
+          reference: reference(anchor),
+          text,
+          urls: chosenUrls(),
+          image,
+          bookPath: anchor.source.path,
+          bookPage: anchor.source.page,
+          bookName: anchor.fileName,
+        };
+
+        if (await notesReachable(settings.digestNote)) {
+          failure = await appendDigest(entry, settings.digestNote);
+        } else if (
+          await queueExcerpt({
+            reference: entry.reference,
+            text: entry.text,
+            urls: entry.urls,
+            imagePath: image?.path ?? '',
+            imageWidth: image?.width ?? 0,
+            imageHeight: image?.height ?? 0,
+            bookPath: entry.bookPath,
+            bookPage: entry.bookPage,
+            bookName: entry.bookName,
           })
-        : await appendDigest(anchor, settings.digestNote, {
-            reference: reference(anchor),
-            text,
-            urls: chosenUrls(),
-            // The clipping goes in where the handwriting would, unless the
-            // reader has asked for links only.
-            image: !settings.savePicture
-              ? null
-              : await drawClip({
-                    title: page.title || query,
-                    source: [reference(anchor), page.viewerUrl ?? url ?? '']
-                      .filter(Boolean)
-                      .join('\n'),
-                    folder: settings.clipFolder,
-                    sections: order
-                      .map(i => page.blocks[i])
-                      .filter((block): block is Block => Boolean(block))
-                      .map(block => ({
-                        heading: block.text,
-                        url: block.href ?? '',
-                        body: block.detail ?? '',
-                      })),
-                  }),
-          });
+        ) {
+          setPicked([]);
+          setStatus('Held for your digest — it goes in next time you look something up from a note.');
+          finish();
+          return;
+        } else {
+          failure = 'the excerpt could not be held for the digest';
+        }
+      }
       if (failure) {
         log(`insert failed: ${failure}`);
         setStatus(`Could not keep that: ${failure}`);
@@ -589,7 +681,10 @@ export default function App(): React.JSX.Element {
       <SettingsScreen
         settings={settings}
         onChange={change}
-        onDone={() => setShowSettings(false)}
+        // Both leave. Settings are opened from the device's plugin management
+        // screen, so finishing with them means going back there -- landing in
+        // the lookup panel is a place nobody asked to be.
+        onDone={() => PluginManager.closePluginView()}
         onClose={() => PluginManager.closePluginView()}
       />
     );
@@ -692,7 +787,10 @@ export default function App(): React.JSX.Element {
 
       {page && page.blocks.length > 0 && (
         <View style={styles.footer}>
-          <Text style={styles.footerText} numberOfLines={2}>
+          {/* On its own line above the buttons. Sharing a row with them, a long
+              message -- and a refusal is always long -- pushed every button off
+              the edge of the screen, which read as the buttons not existing. */}
+          <Text style={styles.footerText} numberOfLines={3}>
             {/* The reason a button did nothing belongs beside the button. The
                 header line carries it too, and a refusal read at the top of the
                 panel while looking at the bottom of it reads as silence. */}
@@ -701,7 +799,7 @@ export default function App(): React.JSX.Element {
                 ? 'Tap passages to choose them'
                 : `${picked.length === 1 ? '1 passage' : `${picked.length} passages`} chosen`)}
           </Text>
-          <View style={styles.spacer} />
+          <View style={styles.footerButtons}>
           {picked.length > 0 && (
             <TouchableOpacity style={styles.btn} onPress={() => setPicked([])}>
               <Text style={styles.btnText}>Clear</Text>
@@ -731,6 +829,7 @@ export default function App(): React.JSX.Element {
               <Text style={styles.insertText}>Insert links</Text>
             </TouchableOpacity>
           )}
+          </View>
         </View>
       )}
     </View>
@@ -932,15 +1031,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  footerButtons: {flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', marginTop: 6},
   footer: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'stretch',
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderTopWidth: 2,
     borderTopColor: '#000',
   },
-  footerText: {fontSize: 14, color: '#000'},
+  footerText: {fontSize: 15, color: '#000'},
   insert: {
     paddingHorizontal: 12,
     paddingVertical: 8,
