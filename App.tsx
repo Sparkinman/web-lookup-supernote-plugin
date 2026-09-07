@@ -96,6 +96,8 @@ export default function App(): React.JSX.Element {
   const [page, setPage] = useState<Page | null>(null);
   const [url, setUrl] = useState<string | null>(null);
   const [history, setHistory] = useState<string[]>([]);
+  /** How far down the result list we have asked for, so "more" can ask further. */
+  const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(false);
   const [picked, setPicked] = useState<number[]>([]);
   const [status, setStatus] = useState<string | null>(null);
@@ -263,6 +265,7 @@ export default function App(): React.JSX.Element {
       }
       log(`search: "${trimmed}" lens=${withLens.id}`);
       setHistory([]);
+      setOffset(0);
       await open(resolve(trimmed, withLens), withLens.followFirst);
     },
     [open],
@@ -521,6 +524,24 @@ export default function App(): React.JSX.Element {
     setTimeout(() => PluginManager.closePluginView(), CLOSE_DELAY);
   }, []);
 
+  /**
+   * The next ten results for the search already showing.
+   *
+   * A result list is one page deep unless it is asked for more, and the first
+   * ten are often the wrong ten. Kept as a separate action rather than an
+   * endless scroll: fetching on scroll would be a repaint on a display that
+   * charges dearly for them.
+   */
+  const showMore = useCallback(() => {
+    if (!lens.more || !query.trim()) {
+      return;
+    }
+    const next = offset + 10;
+    setOffset(next);
+    log(`more: ${lens.id} from ${next}`);
+    void open(lens.more(query, next));
+  }, [lens, offset, open, query]);
+
   const back = useCallback(() => {
     const previous = history[history.length - 1];
     if (!previous) {
@@ -752,12 +773,18 @@ export default function App(): React.JSX.Element {
       setStatus('Nothing on screen to capture yet.');
       return;
     }
-    noteTouched.current = true;
-    setUnsaved(true);
-    setNote(current => (current ? `${current}\n\n${shown}` : shown));
-    setEditingNote(true);
-    setStatus('Captured what is on screen — trim it, then keep it.');
-  }, [visibleText]);
+    // Replaces what was there. Adding to it meant a capture taken on one page
+    // was still in the editor two pages later, which reads as the button
+    // having done nothing -- and the draft is guarded, so an edited one asks
+    // before it goes.
+    guard('Replace the text you have not kept yet?', () => {
+      noteTouched.current = true;
+      setUnsaved(true);
+      setNote(shown);
+      setEditingNote(true);
+      setStatus('Captured what is on screen — trim it, then keep it.');
+    });
+  }, [guard, visibleText]);
 
   /** Photograph the reader as it stands, and hang the picture off the writing. */
   const screenshot = useCallback(async () => {
@@ -916,6 +943,11 @@ export default function App(): React.JSX.Element {
       <Text style={styles.hint} numberOfLines={2}>
         {status ?? (url ? `${page?.title ?? ''} — ${hostOf(url)}` : lens.hint)}
       </Text>
+      {/* What the chosen lens does, said plainly and always. It used to appear
+          only before a search, which is the one moment nobody is wondering. */}
+      <Text style={styles.lensHint} numberOfLines={1}>
+        {lens.label}: {lens.hint}
+      </Text>
       {anchor ? (
         // Shown while reading as well as printed on the clipping: it is the
         // answer to "what was I looking this up for" a month later.
@@ -1017,6 +1049,11 @@ export default function App(): React.JSX.Element {
                 : `${picked.length === 1 ? '1 passage' : `${picked.length} passages`} chosen`)}
           </Text>
           <View style={styles.footerButtons}>
+          {page.blocks.some(block => block.kind === 'result') && lens.more ? (
+            <TouchableOpacity style={styles.btn} onPress={showMore}>
+              <Text style={styles.btnText}>More results</Text>
+            </TouchableOpacity>
+          ) : null}
           {picked.length > 0 && (
             <TouchableOpacity style={styles.btn} onPress={() => setPicked([])}>
               <Text style={styles.btnText}>Clear</Text>
@@ -1186,6 +1223,7 @@ const styles = StyleSheet.create({
   lensText: {fontSize: 14, color: '#000'},
   lensTextOn: {color: '#fff'},
   spacer: {flex: 1},
+  lensHint: {fontSize: 13, color: '#000', paddingHorizontal: 12, paddingBottom: 6},
   hint: {paddingHorizontal: 12, paddingVertical: 6, fontSize: 13, color: '#000'},
   reference: {paddingHorizontal: 12, paddingBottom: 4, fontSize: 12, color: '#000'},
   body: {flex: 1},

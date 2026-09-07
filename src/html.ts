@@ -137,7 +137,28 @@ export function readArticle(html: string, baseUrl: string): Page {
     blocks.push(asLink(text) ?? {kind: tag.startsWith('h') ? 'heading' : 'paragraph', text});
   }
 
-  return {title: titleOf(clean) || baseUrl, blocks: dedupe(blocks)};
+  return {title: titleOf(clean) || baseUrl, blocks: readable(dedupe(blocks))};
+}
+
+/**
+ * Drop the navigation from a page that has prose as well.
+ *
+ * A site's menus, footers and related-article rails come through as short
+ * blocks that are nothing but a link, and on a heavily built page they can
+ * outnumber the article several times over -- which is how a page arrives here
+ * as a list of links with no text in it.
+ *
+ * Only applied when there is enough prose to be confident which is which: on a
+ * page that really is a list of links, throwing them away would leave nothing
+ * at all. A long link is kept regardless, since a headline is a link too.
+ */
+function readable(blocks: Block[]): Block[] {
+  const prose = blocks.filter(block => !block.href && block.text.length > 80);
+  if (prose.length < 3) {
+    return blocks;
+  }
+  const kept = blocks.filter(block => !block.href || block.text.length >= 40);
+  return kept.length > 0 ? kept : blocks;
 }
 
 /** The href, when a block is entirely one link — so it can be followed. */

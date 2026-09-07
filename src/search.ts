@@ -23,6 +23,13 @@ export interface Lens {
   label: string;
   /** Build a URL for a query. */
   url(query: string): string;
+  /**
+   * The same query, further down the list.
+   *
+   * Absent when there is no more to fetch, which is how the reader knows
+   * whether to offer another page at all.
+   */
+  more?(query: string, offset: number): string;
   /** Shown under the search box so the behaviour is not a surprise. */
   hint: string;
   /**
@@ -43,14 +50,18 @@ export const LENSES: Lens[] = [
     id: 'quick',
     label: 'Quick',
     url: q => `https://lite.duckduckgo.com/lite/?q=${encode(q)}`,
-    hint: 'Opens the top result directly',
+    hint: 'Goes straight into the best match, skipping the list',
     followFirst: true,
   },
   {
     id: 'web',
     label: 'Web',
     url: q => `https://lite.duckduckgo.com/lite/?q=${encode(q)}`,
-    hint: 'Result list, no scripts',
+    // `s` is the offset into the results. The lite page's own next-page control
+    // is a form post carrying half a dozen hidden fields, but the offset alone
+    // is enough to get the following ten.
+    more: (q, offset) => `https://lite.duckduckgo.com/lite/?q=${encode(q)}&s=${offset}`,
+    hint: 'The whole result list from DuckDuckGo, ten at a time',
   },
   {
     id: 'wikipedia',
@@ -64,7 +75,11 @@ export const LENSES: Lens[] = [
       'https://en.wikipedia.org/w/api.php?action=query&format=json&formatversion=2' +
       `&generator=search&gsrsearch=${encode(q)}&gsrlimit=8` +
       '&prop=extracts&exintro=1&explaintext=1',
-    hint: 'Article summaries, as plain text',
+    more: (q, offset) =>
+      'https://en.wikipedia.org/w/api.php?action=query&format=json&formatversion=2' +
+      `&generator=search&gsrsearch=${encode(q)}&gsrlimit=8&gsroffset=${offset}` +
+      '&prop=extracts&exintro=1&explaintext=1',
+    hint: 'Encyclopedia articles only, as plain prose',
   },
   {
     id: 'simple',
@@ -73,7 +88,8 @@ export const LENSES: Lens[] = [
     // index, but the lightest thing on this list by a wide margin and the
     // closest the modern web gets to reading like a book.
     url: q => `https://wiby.me/?q=${encode(q)}`,
-    hint: 'Lightweight, text-first pages only',
+    more: (q, offset) => `https://wiby.me/?q=${encode(q)}&p=${Math.floor(offset / 10) + 2}`,
+    hint: 'Small hand-made pages, no advertising or scripts',
   },
 ];
 
