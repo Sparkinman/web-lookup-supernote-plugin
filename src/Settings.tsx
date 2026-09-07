@@ -15,6 +15,8 @@ import React, {useState} from 'react';
 import {ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
 
 import {beginSignIn, CLOUD_AVAILABLE, finishSignIn, testRoundTrip} from './cloud';
+import {cloudPath} from './cloud';
+import {findFile} from './cloudfiles';
 import {fileInfo} from './settings';
 import {FolderPicker} from './FolderPicker';
 import {
@@ -226,7 +228,15 @@ export function SettingsScreen({
         setCloudStatus('That book could not be read. Look something up in one first.');
         return;
       }
-      setCloudStatus(`size ${info.size}, md5 ${info.md5} — see the log.`);
+      // Both, because they are different numbers and the difference is the
+      // point: the file's own hash is not what Supernote calls it.
+      const registered = await findFile(settings.cloudToken, cloudPath(settings.lastBook));
+      setCloudStatus(
+        `On this device: ${info.size} bytes, md5 ${info.md5}. ` +
+          (registered
+            ? `Supernote calls it ${registered.md5} (size ${registered.size}).`
+            : 'Supernote has no record of that file — is it synced?'),
+      );
     } catch (err) {
       setCloudStatus(err instanceof Error ? err.message : 'Could not hash it.');
     } finally {

@@ -155,11 +155,21 @@ class WebModule(private val reactContext: ReactApplicationContext) :
         val status = live.responseCode
         val stream = if (status >= 400) live.errorStream else live.inputStream
         val text = stream?.bufferedReader()?.use(BufferedReader::readText).orEmpty()
+        // Headers come back too: Supernote's file host issues its CSRF token
+        // in one, and there is no other way to get it.
+        val headers = Arguments.createMap()
+        for ((name, values) in live.headerFields) {
+          if (name != null && values != null && values.isNotEmpty()) {
+            headers.putString(name.lowercase(), values[0])
+          }
+        }
+
         LogFile.append("cloud: $status ${text.length} bytes from $url")
         promise.resolve(
             Arguments.createMap().apply {
               putInt("status", status)
               putString("body", text)
+              putMap("headers", headers)
             })
       } catch (t: Throwable) {
         LogFile.append("cloud: $method $url failed $t")

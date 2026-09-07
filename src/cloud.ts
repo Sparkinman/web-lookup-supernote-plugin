@@ -20,6 +20,7 @@
 
 import {NativeModules} from 'react-native';
 
+import {findFile} from './cloudfiles';
 import {log} from './log';
 
 interface WebNative {
@@ -245,6 +246,14 @@ export interface NewDigest {
   sourceType?: number;
   /** The page of that book, which Supernote keeps in a metadata blob. */
   page?: number;
+  /**
+   * The typed note on the passage -- the digest's "keyboard" section.
+   *
+   * A separate field from the passage itself, and the right home for where a
+   * lookup came from: the content is what was read, the comment is what is
+   * known about it.
+   */
+  comment?: string;
   /** Where the passage sits in that page's text, in characters. */
   startPosition?: number;
   endPosition?: number;
@@ -306,7 +315,7 @@ export async function createDigest(token: string, digest: NewDigest): Promise<st
     // Empty strings rather than absent. A real row carries "" for each of
     // these, and a null is not the same thing to whatever renders them.
     parentUniqueIdentifier: digest.libraryUid ?? '',
-    commentStr: '',
+    commentStr: oneLine(digest.comment ?? ''),
     commentHandwriteName: '',
     handwriteMD5: '',
     isSummaryGroup: 'N',
@@ -449,17 +458,31 @@ export async function addBookDigest(
   identity: {md5: string; size: number} | null,
   positions: {start: number; end: number} | null,
 ): Promise<string> {
-  // The passage first, since that is what a person reads in the digest list;
-  // where it came from underneath it.
-  const content = [passage.trim(), reference, ...urls].filter(Boolean).join(' — ');
+  // Supernote's own value for the file, looked up rather than computed: the
+  // file's real MD5 is not what its digests carry. Falls back to the local hash
+  // when the registry cannot be reached, which is no worse than sending none.
+  let sourceMd5 = identity?.md5;
+  try {
+    const registered = await findFile(token, cloudPath(bookPath));
+    if (registered?.md5) {
+      sourceMd5 = registered.md5;
+    }
+  } catch (err) {
+    log(`cloud: could not look the book up (${err instanceof Error ? err.message : String(err)})`);
+  }
+
+  // The passage is the digest; where it came from is a note about it. Putting
+  // both in the content made one paragraph of two different things, and left
+  // the typed section of the entry empty when that is exactly what it is for.
   return createDigest(token, {
-    content,
+    content: passage,
+    comment: [reference, ...urls].filter(Boolean).join(' — '),
     sourcePath: bookPath,
     sourceType: SOURCE_DOCUMENT,
     page,
     startPosition: positions?.start,
     endPosition: positions?.end,
     sourceSize: identity?.size,
-    sourceMd5: identity?.md5,
+    sourceMd5,
   });
 }
