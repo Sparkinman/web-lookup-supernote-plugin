@@ -14,6 +14,7 @@
 import React, {useState} from 'react';
 import {ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
 
+import {beginSignIn, CLOUD_AVAILABLE, finishSignIn, testRoundTrip} from './cloud';
 import {FolderPicker} from './FolderPicker';
 import {
   BOOK_QUERY_CHOICES,
@@ -148,6 +149,80 @@ export function SettingsScreen({
   onClose: () => void;
 }): React.JSX.Element {
   const [open, setOpen] = useState<string>('keep');
+  /**
+   * Sign-in is two steps, because Supernote emails a code between them.
+   *
+   * The password lives here for as long as the form is on screen and is never
+   * saved -- what is kept is the session token it earns.
+   */
+  const [password, setPassword] = useState('');
+  const [code, setCode] = useState('');
+  const [pending, setPending] = useState<{validCodeKey: string; timestamp: unknown} | null>(null);
+  const [cloudStatus, setCloudStatus] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const sendCode = async () => {
+    setBusy(true);
+    setCloudStatus('Asking Supernote for a code…');
+    try {
+      const answer = await beginSignIn(settings.cloudEmail, password);
+      if (answer.token) {
+        onChange({cloudToken: answer.token});
+        setPending(null);
+        setPassword('');
+        setCloudStatus('Signed in.');
+        return;
+      }
+      setPending({validCodeKey: answer.validCodeKey ?? '', timestamp: answer.timestamp});
+      setCloudStatus('Supernote has emailed you a code. Enter it below.');
+    } catch (err) {
+      setCloudStatus(err instanceof Error ? err.message : 'That did not work.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const enterCode = async () => {
+    if (!pending) {
+      return;
+    }
+    setBusy(true);
+    setCloudStatus('Checking the code…');
+    try {
+      const token = await finishSignIn(
+        settings.cloudEmail,
+        code,
+        pending.validCodeKey,
+        pending.timestamp,
+      );
+      onChange({cloudToken: token});
+      setPending(null);
+      setPassword('');
+      setCode('');
+      setCloudStatus('Signed in.');
+    } catch (err) {
+      setCloudStatus(err instanceof Error ? err.message : 'That code was not accepted.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runTest = async () => {
+    setBusy(true);
+    setCloudStatus('Creating a test digest, reading it back, then removing it…');
+    try {
+      const outcome = await testRoundTrip(
+        settings.cloudToken,
+        settings.lastBook || '/storage/emulated/0/Document/Test.pdf',
+        1,
+      );
+      setCloudStatus(outcome);
+    } catch (err) {
+      setCloudStatus(err instanceof Error ? err.message : 'The test failed.');
+    } finally {
+      setBusy(false);
+    }
+  };
   const [picking, setPicking] = useState<'clips' | 'digest' | null>(null);
   const fold = (key: string) => setOpen(current => (current === key ? '' : key));
 
@@ -257,6 +332,100 @@ export function SettingsScreen({
           />
         </Fold>
 
+        {CLOUD_AVAILABLE ? (
+          <Fold
+            title={settings.cloudToken ? 'Supernote Cloud — signed in' : 'Supernote Cloud'}
+            open={open === 'cloud'}
+            onToggle={() => fold('cloud')}>
+            <Text style={styles.help}>
+              A digest taken from a book cannot be written on the device: its markup is locked
+              while the book is open and out of bounds once it is closed. Supernote's own service
+              can write one, and it syncs back down. This talks to Supernote directly — nothing
+              passes through anyone else.
+            </Text>
+
+            <View style={styles.field}>
+              <Text style={styles.fieldLabel}>Supernote account</Text>
+              <TextInput
+                style={styles.input}
+                value={settings.cloudEmail}
+                onChangeText={value => onChange({cloudEmail: value})}
+                placeholder="you@example.com"
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+            </View>
+
+            <View style={styles.field}>
+              <Text style={styles.fieldLabel}>Password</Text>
+              <TextInput
+                style={styles.input}
+                value={password}
+                onChangeText={setPassword}
+                secureTextEntry
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              <Text style={styles.choiceHint}>
+                Never saved. It earns a session token, and the token is what is kept.
+              </Text>
+            </View>
+
+            <TouchableOpacity
+              style={[styles.choice, busy && styles.dim]}
+              disabled={busy}
+              onPress={() => void sendCode()}>
+              <Text style={styles.choiceLabel}>Sign in / send me a code</Text>
+            </TouchableOpacity>
+
+            {pending ? (
+              <View style={styles.field}>
+                <Text style={styles.fieldLabel}>The code Supernote emailed you</Text>
+                <View style={styles.fieldRow}>
+                  <TextInput
+                    style={styles.input}
+                    value={code}
+                    onChangeText={setCode}
+                    keyboardType="number-pad"
+                    autoCorrect={false}
+                  />
+                  <TouchableOpacity
+                    style={[styles.browse, busy && styles.dim]}
+                    disabled={busy}
+                    onPress={() => void enterCode()}>
+                    <Text style={styles.browseLabel}>Enter</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : null}
+
+            {settings.cloudToken ? (
+              <>
+                <TouchableOpacity
+                  style={[styles.choice, busy && styles.dim]}
+                  disabled={busy}
+                  onPress={() => void runTest()}>
+                  <Text style={styles.choiceLabel}>Test that a digest links back</Text>
+                  <Text style={styles.choiceHint}>
+                    Creates one digest naming the last book you looked something up in, reads it
+                    back to see which fields survived, and removes it again.
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.choice}
+                  onPress={() => {
+                    onChange({cloudToken: ''});
+                    setCloudStatus('Signed out.');
+                  }}>
+                  <Text style={styles.choiceLabel}>Sign out</Text>
+                </TouchableOpacity>
+              </>
+            ) : null}
+
+            {cloudStatus ? <Text style={styles.help}>{cloudStatus}</Text> : null}
+          </Fold>
+        ) : null}
+
         <Fold title="How this works" open={open === 'help'} onToggle={() => fold('help')}>
           <Text style={styles.help}>
             Lasso handwriting on a note page, or select text in a book, and tap Web Lookup. What
@@ -339,4 +508,5 @@ const styles = StyleSheet.create({
   folderBody: {backgroundColor: '#000', borderRadius: 2},
 
   help: {fontSize: 17, color: '#000', marginBottom: 10, lineHeight: 24},
+  dim: {opacity: 0.4},
 });

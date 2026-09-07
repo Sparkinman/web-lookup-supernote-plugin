@@ -67,6 +67,10 @@ export interface Settings {
    * not a preference.
    */
   lastBook: string;
+  /** Supernote Cloud account, for writing into the device's own Digest. */
+  cloudEmail: string;
+  /** The session token. Kept rather than the password, which is never stored. */
+  cloudToken: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -83,6 +87,8 @@ export const DEFAULT_SETTINGS: Settings = {
   digestNote: DEFAULT_DIGEST_NOTE,
   clipFolder: DEFAULT_CLIP_FOLDER,
   lastBook: '',
+  cloudEmail: '',
+  cloudToken: '',
 };
 
 /**
@@ -163,6 +169,8 @@ export async function loadSettings(): Promise<Settings> {
           ? parsed.clipFolder.trim()
           : DEFAULT_SETTINGS.clipFolder,
       lastBook: typeof parsed.lastBook === 'string' ? parsed.lastBook : '',
+      cloudEmail: typeof parsed.cloudEmail === 'string' ? parsed.cloudEmail : '',
+      cloudToken: typeof parsed.cloudToken === 'string' ? parsed.cloudToken : '',
     };
   } catch (err) {
     log(`settings: could not read (${err instanceof Error ? err.message : String(err)})`);

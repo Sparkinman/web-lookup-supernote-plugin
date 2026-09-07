@@ -8,6 +8,8 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import java.io.BufferedReader
+import java.security.MessageDigest
+import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.Executors
@@ -102,6 +104,86 @@ class WebModule(private val reactContext: ReactApplicationContext) :
       } finally {
         connection?.disconnect()
       }
+    }
+  }
+
+  /**
+   * A request with a method, headers and a body.
+   *
+   * `get` above is shaped for reading web pages: it follows redirects by hand,
+   * caps the body and announces itself as a text browser. An API call wants
+   * none of that and wants three things it does not offer -- a verb, an
+   * authorisation header, and a JSON body. Kept separate rather than folded in,
+   * because the two have almost nothing in common but the socket.
+   *
+   * `headersJson` is an object of name to value. The body is sent as-is when
+   * non-empty; no body is written for an empty string, which is what a plain
+   * DELETE wants.
+   */
+  @ReactMethod
+  fun request(
+      method: String,
+      url: String,
+      headersJson: String,
+      body: String,
+      promise: Promise
+  ) {
+    executor.execute {
+      var connection: HttpURLConnection? = null
+      try {
+        LogFile.append("cloud: $method $url (${body.length} bytes)")
+        connection = (URL(url).openConnection() as HttpURLConnection).apply {
+          requestMethod = method
+          connectTimeout = TIMEOUT_MS
+          readTimeout = TIMEOUT_MS
+          instanceFollowRedirects = true
+        }
+        val live = connection!!
+
+        if (headersJson.isNotBlank()) {
+          val headers = JSONObject(headersJson)
+          for (name in headers.keys()) {
+            live.setRequestProperty(name, headers.getString(name))
+          }
+        }
+
+        if (body.isNotEmpty()) {
+          live.doOutput = true
+          live.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+        }
+
+        val status = live.responseCode
+        val stream = if (status >= 400) live.errorStream else live.inputStream
+        val text = stream?.bufferedReader()?.use(BufferedReader::readText).orEmpty()
+        LogFile.append("cloud: $status ${text.length} bytes from $url")
+        promise.resolve(
+            Arguments.createMap().apply {
+              putInt("status", status)
+              putString("body", text)
+            })
+      } catch (t: Throwable) {
+        LogFile.append("cloud: $method $url failed $t")
+        promise.reject("REQUEST_FAILED", t.message ?: t.toString(), t)
+      } finally {
+        connection?.disconnect()
+      }
+    }
+  }
+
+  /**
+   * A hex digest, for signing in to Supernote Cloud.
+   *
+   * Its login never sends the password: it is MD5-hexed, the server's nonce
+   * appended, and the result SHA-256-hexed. A React Native bundle has no crypto
+   * to do that with, so it happens here.
+   */
+  @ReactMethod
+  fun hash(algorithm: String, input: String, promise: Promise) {
+    try {
+      val bytes = MessageDigest.getInstance(algorithm).digest(input.toByteArray(Charsets.UTF_8))
+      promise.resolve(bytes.joinToString("") { "%02x".format(it) })
+    } catch (t: Throwable) {
+      promise.reject("HASH_FAILED", t.message ?: t.toString(), t)
     }
   }
 
